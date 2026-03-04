@@ -7,6 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
 import ReactMarkdown from 'react-markdown';
 import { MessageContent } from '@/components/MessageContent';
+import { MermaidRenderer } from '@/components/MermaidRenderer';
 import { 
   Upload, 
   Send, 
@@ -24,13 +25,17 @@ import {
   Database,
   ClipboardList,
   RefreshCw,
-  ExternalLink,
   Download,
   Copy,
-  Check
+  Check,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Sitemap,
+  TestTube
 } from 'lucide-react';
 
-// Pipeline stages configuration
+// Pipeline stages configuration - 7 stages now (CJM and IA separated)
 const PIPELINE_STAGES = [
   {
     id: 'ideas',
@@ -52,12 +57,21 @@ const PIPELINE_STAGES = [
   },
   {
     id: 'cjm',
-    name: 'CJM & IA',
+    name: 'CJM',
     fullName: 'Customer Journey Map',
-    description: 'Карта пути пользователя и информационная архитектура',
+    description: 'Карта пути пользователя с эмоциональным графиком',
     agent: 'cjm_researcher',
     icon: TrendingUp,
     color: 'from-emerald-400 to-teal-500'
+  },
+  {
+    id: 'ia',
+    name: 'IA',
+    fullName: 'Информационная архитектура',
+    description: 'Структура продукта с таксономиями сущностей',
+    agent: 'ia_architect',
+    icon: Sitemap,
+    color: 'from-cyan-400 to-blue-500'
   },
   {
     id: 'userflow',
@@ -72,7 +86,7 @@ const PIPELINE_STAGES = [
     id: 'prototype',
     name: 'Прототип',
     fullName: 'Интерактивный прототип',
-    description: 'HTML прототип в техно-стиле',
+    description: 'HTML прототип с Яндекс.Метрикой',
     agent: 'prototyper',
     icon: Database,
     color: 'from-violet-400 to-purple-500'
@@ -80,10 +94,10 @@ const PIPELINE_STAGES = [
   {
     id: 'testing',
     name: 'Тестирование',
-    fullName: 'План юзабилити-тестирования',
-    description: 'План тестирования на основе сценариев',
+    fullName: 'Юзабилити-тестирование',
+    description: 'Скрипт приглашения и гайдлайн проведения',
     agent: 'task_architect',
-    icon: ClipboardList,
+    icon: TestTube,
     color: 'from-pink-400 to-rose-500'
   }
 ];
@@ -104,6 +118,7 @@ export default function UXPipelineApp() {
   const [stageResults, setStageResults] = useState<StageResult[]>([]);
   const [activeResultTab, setActiveResultTab] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [zoomLevel, setZoomLevel] = useState(100);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultsEndRef = useRef<HTMLDivElement>(null);
 
@@ -166,33 +181,60 @@ export default function UXPipelineApp() {
 Транскрипция:
 ${fullText}`;
             break;
+            
           case 'competitors':
             prompt = `Проведи виртуальный анализ конкурентов на основе выделенных идей.
 
 Включи:
-1. Прямые конкуренты (3-5) — аналогичные продукты
+1. Прямые конкуренты (3-5) — аналогичные продукты с анализом функций, цен, UX
 2. Косвенные конкуренты (2-3) — альтернативные решения
 3. Сравнительная таблица: функции, цены, UX, сильные/слабые стороны
-4. Возможности дифференциации
+4. Возможности дифференциации (Mermaid mindmap)
 5. Рекомендации по позиционированию
 
 Контекст предыдущего этапа:
 ${accumulatedContext}`;
             break;
+            
           case 'cjm':
-            prompt = `Построй Customer Journey Map и Информационную архитектуру.
+            prompt = `Построй Customer Journey Map с эмоциональным графиком.
 
 Включи:
-1. Mermaid journey диаграмму пути пользователя
-2. Детальное описание каждого этапа (цель, touchpoints, эмоции, боли)
-3. Mermaid mindmap информационной архитектуры
-4. Ключевые метрики каждого этапа
+1. Mermaid journey диаграмму с минимум 5 этапами
+2. Для каждого этапа укажи:
+   - Цель пользователя
+   - Touchpoints (точки контакта)
+   - Эмоциональное состояние (score 1-5)
+   - Боли и барьеры
+   - Возможности улучшения
+3. Ключевые инсайты карты
 
-Используй Mermaid синтаксис для визуализации.
+Используй Mermaid journey синтаксис для визуализации.
 
 Контекст:
 ${accumulatedContext}`;
             break;
+            
+          case 'ia':
+            prompt = `Создай Информационную архитектуру с таксономиями сущностей.
+
+Включи:
+1. Mermaid mindmap или flowchart со структурой продукта
+2. ТАКСОНОМИЯ СУЩНОСТЕЙ:
+   - Пользовательские сущности (User entities)
+   - Контентные сущности (Content entities)
+   - Системные сущности (System entities)
+   - Связи между сущностями
+3. Атрибуты каждой сущности (поля, типы данных)
+4. ER-диаграмма связей (Mermaid erDiagram)
+5. Навигационная структура
+
+Используй несколько Mermaid диаграмм для визуализации.
+
+Контекст:
+${accumulatedContext}`;
+            break;
+            
           case 'userflow':
             prompt = `Создай детальные пользовательские сценарии и userflow.
 
@@ -206,8 +248,9 @@ ${accumulatedContext}`;
 Контекст:
 ${accumulatedContext}`;
             break;
+            
           case 'prototype':
-            prompt = `Создай ПОЛНЫЙ интерактивный HTML прототип.
+            prompt = `Создай ПОЛНЫЙ интерактивный HTML прототип с разметкой под Яндекс.Метрику.
 
 ТРЕБОВАНИЯ К ДИЗАЙНУ (обязательно):
 - Техно-стиль: тёмный фон (#0a0a0f, #0d0d14, #12121a)
@@ -218,41 +261,89 @@ ${accumulatedContext}`;
 - Шрифты: Inter, system-ui, sans-serif
 - Border-radius: 8px-16px
 
+ИНТЕГРАЦИЯ ЯНДЕКС.МЕТРИКИ:
+Добавь в <head>:
+<script type="text/javascript">
+   (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+   m[i].l=1*new Date();
+   for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+   k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+   (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+
+   ym(METRIKA_ID, "init", {
+        clickmap:true,
+        trackLinks:true,
+        accurateTrackBounce:true,
+        webvisor:true
+   });
+</script>
+<noscript><div><img src="https://mc.yandex.ru/watch/METRIKA_ID" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+
+РАЗМЕТКА ДЛЯ АНАЛИТИКИ (data-атрибуты):
+- data-ym-event="event_name" — для отслеживания событий
+- data-ym-goal="goal_name" — для целей
+- data-ym-category="category" — категория элемента
+- data-ym-label="label" — метка элемента
+- data-ym-value="value" — значение
+
+ПРИМЕРЫ РАЗМЕТКИ:
+<button data-ym-event="click" data-ym-category="CTA" data-ym-label="main_cta" data-ym-goal="registration">
+<a data-ym-event="navigation" data-ym-category="menu" data-ym-label="pricing">
+<form data-ym-event="form_submit" data-ym-category="lead" data-ym-goal="contact_form">
+
 ACCESSIBILITY (WCAG AA):
 - Контрастность текста минимум 4.5:1
 - Фокус-индикаторы (ring-2 ring-amber-400)
 - aria-labels на всех интерактивных элементах
 - role атрибуты для навигации
-
-АДАПТИВНОСТЬ:
-- Mobile-first подход
-- Responsive grid (grid-cols-1 md:grid-cols-2 lg:grid-cols-3)
-- Touch-friendly кнопки (минимум 44px)
+- skip-link для навигации с клавиатуры
 
 СТРУКТУРА ПРОТОТИПА:
-1. Header с навигацией
-2. Hero секция с CTA
-3. Features секция (3-4 карточки)
-4. Целевая страница/форма (на основе сценария)
+1. Header с навигацией (data-ym-category="navigation")
+2. Hero секция с CTA (data-ym-goal="main_conversion")
+3. Features секция (data-ym-category="features")
+4. Целевая страница/форма (data-ym-goal="lead_generation")
 5. Footer
 
-Верни ПОЛНЫЙ HTML код с Tailwind через CDN.
+Верни ПОЛНЫЙ HTML код с Tailwind через CDN и разметкой для аналитики.
 
 Контекст:
 ${accumulatedContext}`;
             break;
+            
           case 'testing':
-            prompt = `Создай план юзабилити-тестирования.
+            prompt = `Создай полный комплект для юзабилити-тестирования.
 
-Включи:
-1. Цели тестирования (3-5 целей с метриками успеха)
-2. Методология (тип тестирования, инструменты, формат)
-3. Профиль участников (количество, критерии отбора, сегменты)
-4. Сценарии задач (3-5 задач с критериями успеха)
-5. Вопросы для пост-тест интервью (5-7 вопросов)
-6. Метрики для отслеживания (количественные и качественные)
-7. Тайминг проведения (поэтапно)
-8. Критерии приёмки (Definition of Done)
+## 1. СКРИПТ ПРИГЛАШЕНИЯ УЧАСТНИКОВ
+Напиши готовый скрипт для рекрутинга участников:
+- Заголовок приглашения
+- Введение (что тестируем)
+- Описание профиля участника
+- Что получит участник
+- Форма записи (поля)
+- Контакты для связи
+- Версии для разных каналов (email, мессенджеры, соцсети)
+
+## 2. ГАЙДЛАЙН ПРОВЕДЕНИЯ ТЕСТИРОВАНИЯ
+Детальное руководство:
+- Подготовка к тесту (оборудование, помещение)
+- Структура сессии (тайминг по этапам)
+- Скрипт модератора (вступление, задачи, завершение)
+- Задачи для тестирования (3-5 задач)
+- Вопросы think-aloud
+- Пост-тест интервью (5-7 вопросов)
+- Чек-лист наблюдателя
+- Шаблон протокола
+
+## 3. КРИТЕРИИ ОЦЕНКИ
+- Количественные метрики (success rate, time on task, errors)
+- Качественные метрики (SUS, NPS, удовлетворённость)
+- SEVERITY rating для найденных проблем
+
+## 4. АНАЛИЗ РЕЗУЛЬТАТОВ
+- Шаблон отчёта
+- Приоритизация проблем
+- Рекомендации по улучшению
 
 Контекст:
 ${accumulatedContext}`;
@@ -295,6 +386,7 @@ ${accumulatedContext}`;
     setCurrentStage(-1);
     setInputText('');
     handleRemoveFile();
+    setZoomLevel(100);
   };
 
   const copyToClipboard = async (text: string, id: string) => {
@@ -304,7 +396,6 @@ ${accumulatedContext}`;
   };
 
   const downloadHTML = (content: string) => {
-    // Extract HTML from markdown code block
     const htmlMatch = content.match(/```html\n([\s\S]*?)\n```/);
     const html = htmlMatch ? htmlMatch[1] : content;
     
@@ -312,7 +403,7 @@ ${accumulatedContext}`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'prototype.html';
+    a.download = 'prototype-with-analytics.html';
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -327,6 +418,16 @@ ${accumulatedContext}`;
     setStageResults([]);
     setActiveResultTab(null);
     setCurrentStage(-1);
+    setZoomLevel(100);
+  };
+
+  const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 25, 200));
+  const handleZoomOut = () => setZoomLevel(prev => Math.max(prev - 25, 50));
+  const handleZoomReset = () => setZoomLevel(100);
+
+  // Check if current tab has Mermaid diagrams
+  const hasMermaid = (content: string) => {
+    return content.includes('```mermaid');
   };
 
   return (
@@ -582,7 +683,38 @@ ${accumulatedContext}`;
                       </div>
                       
                       {/* Actions */}
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
+                        {/* Zoom controls for CJM and IA */}
+                        {(activeResultTab === 'cjm' || activeResultTab === 'ia') && (
+                          <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleZoomOut}
+                              className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+                            >
+                              <ZoomOut className="w-4 h-4" />
+                            </Button>
+                            <span className="text-xs text-gray-400 px-2">{zoomLevel}%</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleZoomIn}
+                              className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+                            >
+                              <ZoomIn className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleZoomReset}
+                              className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+                            >
+                              <Maximize2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+                        
                         <Button
                           variant="outline"
                           size="sm"
@@ -617,7 +749,14 @@ ${accumulatedContext}`;
                   
                   {/* Content */}
                   <ScrollArea className="h-[calc(100vh-280px)]">
-                    <div className="p-4 sm:p-6">
+                    <div 
+                      className="p-4 sm:p-6"
+                      style={{ 
+                        transform: (activeResultTab === 'cjm' || activeResultTab === 'ia') ? `scale(${zoomLevel / 100})` : 'none',
+                        transformOrigin: 'top left',
+                        width: (activeResultTab === 'cjm' || activeResultTab === 'ia') ? `${10000 / zoomLevel}%` : 'auto'
+                      }}
+                    >
                       <div className="prose prose-invert prose-sm max-w-none 
                         prose-headings:text-white prose-headings:font-semibold
                         prose-h2:text-xl prose-h2:border-b prose-h2:border-white/10 prose-h2:pb-2
@@ -626,7 +765,7 @@ ${accumulatedContext}`;
                         prose-li:text-gray-300
                         prose-strong:text-white
                         prose-code:text-amber-400 prose-code:bg-white/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
-                        prose-pre:bg-[#0d0d14] prose-pre:border prose-pre:border-white/10 prose-pre:rounded-xl
+                        prose-pre:bg-[#0d0d14] prose-pre:border prose-pre:border-white/10 prose-pre:rounded-xl prose-pre:overflow-x-auto
                         prose-table:border-collapse
                         prose-th:bg-white/5 prose-th:text-white prose-th:p-3 prose-th:border prose-th:border-white/10
                         prose-td:p-3 prose-td:border prose-td:border-white/10 prose-td:text-gray-300

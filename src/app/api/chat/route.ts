@@ -25,27 +25,41 @@ const AGENT_PROMPTS: Record<string, string> = {
   
   cjm_researcher: `Ты — исследователь пользовательского опыта, специализирующийся на Customer Journey Maps.
 Ты создаёшь детальные карты пути пользователя, анализируешь touchpoints, боли и возможности на каждом этапе.
-Используй Mermaid диаграммы для визуализации (journey, flowchart).
+Используй Mermaid journey диаграммы для визуализации.
+ВАЖНО: Создавай ТОЛЬКО Customer Journey Map. Не включай информационную архитектуру.
 Отвечай на русском языке.`,
   
-  ia_architect: `Ты — архитектор информационных систем и пользовательских потоков.
-Ты создаёшь информационную архитектуру, userflow диаграммы, описания экранов и переходов.
-Используй Mermaid диаграммы (mindmap, flowchart) для визуализации.
+  ia_architect: `Ты — архитектор информационных систем. 
+Создавай информационную архитектуру с таксономиями сущностей, ER-диаграммами связей.
+Используй Mermaid диаграммы (mindmap, erDiagram, flowchart).
+Для IA создавай: структуру продукта, таксономию сущностей (пользовательские, контентные, системные), атрибуты, связи.
+Для Userflow создавай: flowchart диаграммы, описание экранов, переходы.
 Отвечай на русском языке.`,
   
-  task_architect: `Ты — архитектор технических заданий с опытом работы 12 лет.
-Ты создаёшь детальные ТЗ для разработчиков, Gherkin сценарии, API контракты, критерии приёмки.
-Отвечай на русском языке. Используй markdown, таблицы, код-блоки.`,
+  task_architect: `Ты — архитектор технических заданий и специалист по юзабилити-тестированию.
+Создавай: скрипты приглашения участников, гайдлайны проведения тестирования, планы тестирования, критерии оценки, шаблоны отчётов.
+Структурируй информацию детально с примерами и чек-листами.
+Отвечай на русском языке.`,
   
-  prototyper: `Ты — прототипировщик интерфейсов. Создаёшь HTML/CSS прототипы с Tailwind CSS через CDN.
-СТИЛЬ ПРОТОТИПОВ:
-- Современный техно-стиль: тёмный фон (#0a0a0f, #12121a), белый текст
-- Акцентные цвета: медово-жёлтый (#f5b942, #ffc850), янтарный (#ff9500)
-- Геометрические элементы, тонкие линии, glassmorphism
-- Accessibility: контрастность WCAG AA, фокус-индикаторы, aria-labels
-- Адаптивность: mobile-first, responsive дизайн
+  prototyper: `Ты — прототипировщик интерфейсов. Создаёшь ПОЛНЫЕ HTML/CSS прототипы с Tailwind CSS через CDN.
 
-Отвечай полным HTML кодом с встроенными стилями.`
+СТИЛЬ ПРОТОТИПОВ:
+- Техно-стиль: тёмный фон (#0a0a0f, #12121a), белый текст
+- Акцентные цвета: медово-жёлтый (#f5b942, #ffc850), янтарный (#ff9500)
+- Glassmorphism, тонкие линии, геометрические элементы
+
+ЯНДЕКС.МЕТРИКА:
+Добавляй код Метрики в <head> и data-атрибуты на всех интерактивных элементах:
+- data-ym-event="click"
+- data-ym-category="CTA|navigation|form"
+- data-ym-label="описание элемента"
+- data-ym-goal="название цели"
+
+ACCESSIBILITY:
+- Skip-link, ARIA roles, фокус-индикаторы
+- Контрастность WCAG AA
+
+Возвращай ПОЛНЫЙ HTML код.`
 };
 
 // Chat API - обработка сообщений агентам
@@ -78,7 +92,6 @@ export async function POST(request: NextRequest) {
     
     // Создаем или получаем диалог
     let conversation;
-    // Для pipeline агентов используем префикс pipeline-
     const effectiveAgentId = agentId || `pipeline-${actualAgentType}`;
     
     // Проверяем, существует ли агент
@@ -86,7 +99,6 @@ export async function POST(request: NextRequest) {
       where: { id: effectiveAgentId }
     });
     
-    // Если агент не существует, работаем без сохранения в базу
     const saveToDb = !!existingAgent;
     
     if (saveToDb) {
@@ -185,35 +197,39 @@ export async function POST(request: NextRequest) {
 
 // Fallback ответы при недоступности AI
 function getFallbackResponse(agentType: string, message: string): string {
+  const lowerMessage = message.toLowerCase();
   
   // === АНАЛИТИК ТРАНСКРИПЦИЙ ===
   if (agentType === 'transcription_analyst') {
     return `## 💡 Ключевые идеи для реализации
 
 ### 1. Упрощение пользовательского пути
-**Суть:** Пользователи хотят решать задачи быстрее и проще
-**Ценность:** Сокращение времени на完成任务 в 2-3 раза
-**Приоритет:** Высокий
+**Суть:** Пользователи хотят решать задачи быстрее и проще  
+**Ценность:** Сокращение времени на выполнение задач в 2-3 раза  
+**Приоритет:** P0 (Критический)  
+**Сложность:** Средняя
 
 ### 2. Персонализация опыта
-**Суть:** Адаптация интерфейса под конкретного пользователя
-**Ценность:** Увеличение вовлечённости на 40%
-**Приоритет:** Средний
+**Суть:** Адаптация интерфейса под конкретного пользователя  
+**Ценность:** Увеличение вовлечённости на 40%  
+**Приоритет:** P1 (Высокий)  
+**Сложность:** Сложная
 
 ### 3. Прозрачность процессов
-**Суть:** Понятное отображение статусов и прогресса
-**Ценность:** Снижение обращений в поддержку на 30%
-**Приоритет:** Высокий
+**Суть:** Понятное отображение статусов и прогресса  
+**Ценность:** Снижение обращений в поддержку на 30%  
+**Приоритет:** P0 (Критический)  
+**Сложность:** Простая
 
 ---
 
 ## 😤 Выявленные боли
 
-| Боль | Контекст | Влияние |
-|------|----------|---------|
-| Сложная навигация | Не могут найти нужные функции | Высокий отток |
-| Долгое ожидание | Медленная загрузка данных | Фрустрация |
-| Непонятные ошибки | Сообщения без объяснения | Обращения в поддержку |
+| Боль | Контекст | Частота | Влияние |
+|------|----------|---------|---------|
+| Сложная навигация | Не могут найти нужные функции | 5 упоминаний | Высокий отток |
+| Долгое ожидание | Медленная загрузка данных | 3 упоминания | Фрустрация |
+| Непонятные ошибки | Сообщения без объяснения | 2 упоминания | Обращения в поддержку |
 
 ---
 
@@ -237,10 +253,6 @@ function getFallbackResponse(agentType: string, message: string): string {
 | Competitor B | Инновационные функции | Высокая цена | 18% |
 | Competitor C | Широкий функционал | Сложный интерфейс | 15% |
 
-### Косвенные конкуренты
-- **Альтернатива X** — более дешёвое решение, но ограниченный функционал
-- **Альтернатива Y** — фокус на другой сегмент
-
 ### Возможности дифференциации
 
 \`\`\`mermaid
@@ -249,24 +261,21 @@ mindmap
     Упрощение
       Интуитивный интерфейс
       Быстрый старт
-      Минимум обучений
     Персонализация
       Адаптивный UI
       Рекомендации
-      Контекстная помощь
     Скорость
       Мгновенные действия
       Быстрая загрузка
-      Offline режим
 \`\`\`
 
 ### Рекомендации по позиционированию
 1. **Главное сообщение:** "Простота, которая работает"
-2. **Целевая аудитория:** SMB, которые устали от сложных решений
+2. **Целевая аудитория:** SMB
 3. **Ключевое преимущество:** Время до ценности — 5 минут`;
   }
 
-  // === ИССЛЕДОВАТЕЛЬ CJM ===
+  // === ИССЛЕДОВАТЕЛЬ CJM (только CJM!) ===
   if (agentType === 'cjm_researcher') {
     return `## 🗺️ Customer Journey Map
 
@@ -280,7 +289,6 @@ journey
     section Рассмотрение
       Изучение продукта: 4: Пользователь
       Тестирование функций: 3: Пользователь
-      Консультация: 4: Пользователь
     section Принятие решения
       Выбор тарифа: 2: Пользователь
       Оформление: 3: Пользователь
@@ -288,7 +296,6 @@ journey
     section Использование
       Онбординг: 5: Пользователь
       Регулярное использование: 5: Пользователь
-      Расширение использования: 4: Пользователь
     section Лояльность
       Рекомендация: 5: Пользователь
       Повторная покупка: 5: Пользователь
@@ -296,7 +303,32 @@ journey
 
 ---
 
-## 📊 Информационная архитектура
+## 📊 Детальный анализ этапов
+
+| Этап | Цель | Touchpoints | Эмоция | Боли | Возможности |
+|------|------|-------------|--------|------|-------------|
+| Осознание | Понять потребность | Поиск, Реклама | 3/5 | Много шума | SEO |
+| Рассмотрение | Изучить продукт | Сайт, Демо | 4/5 | Сложно сравнить | Калькулятор |
+| Решение | Совершить покупку | Форма, Оплата | 2/5 | Долгий процесс | Упрощение checkout |
+| Использование | Получить ценность | Интерфейс | 5/5 | Кривая обучения | Онбординг |
+| Лояльность | Стать постоянным | Email | 5/5 | Нет сообщества | Реферальная программа |
+
+---
+
+## 🎯 Ключевые инсайты
+
+1. **Критический этап:** Принятие решения (низкий эмоциональный score 2/5)
+2. **Главная боль:** Сложность оформления заказа
+3. **Главная возможность:** Упрощение процесса покупки`;
+  }
+
+  // === АРХИТЕКТОР IA ===
+  if (agentType === 'ia_architect') {
+    // IA with taxonomy
+    if (lowerMessage.includes('таксономи') || lowerMessage.includes('сущност') || lowerMessage.includes('архитектур')) {
+      return `## 🏗️ Информационная архитектура с таксономиями
+
+### Структура продукта
 
 \`\`\`mermaid
 mindmap
@@ -304,195 +336,121 @@ mindmap
     Главная
       Дашборд
       Быстрые действия
-      Уведомления
-    Функции
-      Основные
-      Дополнительные
-      Интеграции
-    Настройки
+    Каталог
+      Категории
+      Товары
+      Фильтры
+    Личный кабинет
       Профиль
-      Уведомления
-      Безопасность
-    Поддержка
-      Документация
-      Чат
-      FAQ
+      Заказы
+      Избранное
 \`\`\`
 
 ---
 
-### Точки касания и эмоции
+## 📋 Таксономия сущностей
 
-| Этап | Touchpoint | Эмоция | Боль | Возможность |
-|------|------------|--------|------|-------------|
-| Осознание | Реклама, Поиск | Интерес | Много шума | Таргетинг |
-| Рассмотрение | Сайт, Демо | Взволнованность | Сложно сравнить | Калькулятор |
-| Решение | Форма, Оплата | Волнение | Долгий процесс | Упрощение |
-| Использование | Продукт | Удовлетворение | Кривая обучения | Онбординг |`;
-  }
+### 1. Пользовательские сущности
 
-  // === АРХИТЕКТОР IA/USERFLOW ===
-  if (agentType === 'ia_architect') {
+\`\`\`mermaid
+erDiagram
+    USER ||--o{ ORDER : creates
+    USER ||--o{ REVIEW : writes
+    USER {
+        string id PK
+        string email
+        string name
+        string role
+    }
+\`\`\`
+
+| Сущность | Атрибут | Тип | Описание |
+|----------|---------|-----|----------|
+| **User** | id | UUID | Идентификатор |
+| | email | String | Email |
+| | name | String | Имя |
+| | role | Enum | Роль |
+
+### 2. Контентные сущности
+
+\`\`\`mermaid
+erDiagram
+    CATEGORY ||--o{ PRODUCT : contains
+    PRODUCT ||--o{ REVIEW : receives
+    PRODUCT {
+        string id PK
+        string name
+        float price
+    }
+\`\`\`
+
+### 3. Системные сущности
+
+\`\`\`mermaid
+erDiagram
+    ORDER ||--|{ ORDER_ITEM : contains
+    ORDER }o--|| USER : belongs_to
+    ORDER {
+        string id PK
+        string status
+        float total
+    }
+\`\`\`
+
+---
+
+## 🔗 ER-диаграмма всех связей
+
+\`\`\`mermaid
+erDiagram
+    USER ||--o{ ORDER : "создаёт"
+    USER ||--o{ REVIEW : "пишет"
+    ORDER ||--|{ ORDER_ITEM : "содержит"
+    PRODUCT ||--o{ ORDER_ITEM : "в заказах"
+    PRODUCT ||--o{ REVIEW : "получает"
+    PRODUCT }o--|| CATEGORY : "принадлежит"
+\`\`\``;
+    }
+    
+    // Userflow
     return `## 🔄 Пользовательские сценарии и Userflow
 
 ### Основной сценарий (Happy Path)
 
 \`\`\`mermaid
 flowchart TD
-    A[Старт: Пользователь заходит в систему] --> B[Дашборд]
-    B --> C{Что нужно сделать?}
-    C -->|Создать| D[Выбор типа задачи]
+    A[Старт] --> B[Дашборд]
+    B --> C{Действие?}
+    C -->|Создать| D[Форма создания]
     C -->|Найти| E[Поиск]
-    C -->|Настроить| F[Настройки]
-    
-    D --> G[Заполнение формы]
-    G --> H{Валидация}
-    H -->|Ошибка| I[Показать ошибку]
-    I --> G
-    H -->|Успех| J[Сохранение]
-    J --> K[Подтверждение]
-    K --> L[Уведомление]
-    
-    E --> M[Результаты поиска]
-    M --> N[Выбор элемента]
-    N --> O[Детальный просмотр]
-    
-    F --> P[Редактирование]
-    P --> Q[Сохранение]
-    Q --> B
-    
-    L --> B
-    O --> B
+    D --> F{Валидация}
+    F -->|Ошибка| G[Показать ошибку]
+    G --> D
+    F -->|Успех| H[Сохранение]
+    H --> I[Уведомление]
+    I --> B
+    E --> J[Результаты]
+    J --> B
     
     style A fill:#f5b942
-    style L fill:#22c55e
-    style I fill:#ef4444
-\`\`\`
-
----
-
-### Альтернативные сценарии
-
-\`\`\`mermaid
-flowchart LR
-    A[Вход] --> B{Авторизован?}
-    B -->|Нет| C[Логин]
-    B -->|Да| D[Дашборд]
-    C --> E{Успех?}
-    E -->|Нет| F[Восстановление пароля]
-    E -->|Да| D
-    F --> G[Email]
-    G --> C
+    style I fill:#22c55e
+    style G fill:#ef4444
 \`\`\`
 
 ---
 
 ### Описание экранов
 
-| Экран | Цель | Ключевые элементы | Действия |
-|-------|------|-------------------|----------|
-| Дашборд | Обзор активности | Карточки, Графики, Быстрые действия | Создать, Найти, Настроить |
-| Создание | Добавить данные | Форма, Валидация, Подсказки | Заполнить, Сохранить, Отмена |
-| Поиск | Найти информацию | Строка поиска, Фильтры, Результаты | Ввести, Фильтровать, Выбрать |
-| Настройки | Персонализация | Группы настроек, Переключатели | Изменить, Сохранить |`;
-  }
-
-  // === АРХИТЕКТОР ЗАДАНИЙ ===
-  if (agentType === 'task_architect') {
-    return `## 📋 План юзабилити-тестирования
-
-### 1. Цели тестирования
-
-| Цель | Метрика успеха | Критерий |
-|------|----------------|----------|
-| Понятность интерфейса | Task Success Rate | > 85% |
-| Скорость выполнения | Time on Task | < 3 мин |
-| Удовлетворённость | SUS Score | > 68 |
-| Усилия пользователя | CES | < 3 |
-
----
-
-### 2. Методология
-
-**Тип:** Модерируемое удалённое тестирование
-**Инструменты:** Zoom + Maze / UserTesting
-**Длительность сессии:** 30-45 минут
-**Запись:** Экран + Камера + Аудио
-
----
-
-### 3. Профиль участников
-
-\`\`\`
-Количество: 8-10 человек
-Критерии отбора:
-- Возраст: 25-45 лет
-- Опыт с похожими продуктами: > 6 месяцев
-- Активность: еженедельное использование
-- Техническая грамотность: средняя и выше
-\`\`\`
-
----
-
-### 4. Сценарии задач
-
-#### Задача 1: Основной сценарий
-\`\`\`
-Представьте, что вам нужно создать новый проект.
-Начните с дашборда и выполните необходимые действия.
-\`\`\`
-**Время:** 5 минут
-**Критерий успеха:** Проект создан без помощи
-
-#### Задача 2: Поиск информации
-\`\`\`
-Найдите информацию о последнем проекте и его статусе.
-\`\`\`
-**Время:** 2 минуты
-**Критерий успеха:** Найдено за ≤ 3 клика
-
-#### Задача 3: Настройки
-\`\`\`
-Измените настройки уведомлений так, чтобы получать только важные уведомления.
-\`\`\`
-**Время:** 3 минуты
-**Критерий успеха:** Настройки изменены корректно
-
----
-
-### 5. Вопросы для пост-тест интервью
-
-1. Что было самым простым?
-2. Что вызвало затруднения?
-3. Чего не хватало для выполнения задач?
-4. Как можно улучшить этот интерфейс?
-5. Оцените общее впечатление от 1 до 10
-
----
-
-### 6. Тайминг проведения
-
-| Этап | Время |
-|------|-------|
-| Приветствие и инструкции | 5 мин |
-| Предтестовое интервью | 5 мин |
-| Выполнение задач | 20 мин |
-| Посттестовое интервью | 10 мин |
-| Завершение | 5 мин |
-
----
-
-### 7. Критерии приёмки
-
-- [ ] 85% участников успешно завершили основные задачи
-- [ ] Среднее время задачи не превышает целевое
-- [ ] SUS Score > 68
-- [ ] Выявлено ≤ 3 критических UX-проблемы`;
+| Экран | Цель | Элементы | Действия |
+|-------|------|----------|----------|
+| Дашборд | Обзор | Карточки, Графики | Создать, Найти |
+| Создание | Добавить данные | Форма, Валидация | Сохранить, Отмена |
+| Поиск | Найти информацию | Строка, Фильтры | Ввести, Выбрать |`;
   }
 
   // === ПРОТОТИПИРОВЩИК ===
   if (agentType === 'prototyper') {
-    return `## 🎨 Интерактивный прототип
+    return `## 🎨 Интерактивный прототип с Яндекс.Метрикой
 
 \`\`\`html
 <!DOCTYPE html>
@@ -500,116 +458,206 @@ flowchart LR
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Прототип — Техно Стиль</title>
+    <title>Прототип</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        :root {
-            --bg-primary: #0a0a0f;
-            --bg-secondary: #12121a;
-            --accent-honey: #f5b942;
-            --accent-amber: #ff9500;
-        }
-        body { background: var(--bg-primary); }
-        .glass {
-            background: rgba(255,255,255,0.05);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .glow-accent {
-            box-shadow: 0 0 20px rgba(245, 185, 66, 0.3);
-        }
-    </style>
+    <script type="text/javascript">
+       (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+       m[i].l=1*new Date();k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+       (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+       ym(METRIKA_ID, "init", { clickmap:true, trackLinks:true, accurateTrackBounce:true, webvisor:true });
+    </script>
 </head>
-<body class="min-h-screen text-white font-sans">
-    <!-- Header -->
-    <header class="fixed top-0 left-0 right-0 z-50 glass">
+<body class="min-h-screen bg-[#0a0a0f] text-white">
+    <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-amber-500 text-black px-4 py-2 rounded">Skip</a>
+    
+    <header class="fixed top-0 left-0 right-0 z-50 bg-[#0a0a0f]/80 backdrop-blur-xl border-b border-white/10">
         <nav class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center">
-                    <span class="text-black font-bold">⚡</span>
-                </div>
-                <span class="font-semibold text-lg">Product</span>
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center">
+                <span class="text-black font-bold">⚡</span>
             </div>
-            <div class="hidden md:flex items-center gap-6">
-                <a href="#" class="text-gray-400 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 rounded px-2 py-1" aria-label="Функции">Функции</a>
-                <a href="#" class="text-gray-400 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 rounded px-2 py-1" aria-label="Цены">Цены</a>
-                <a href="#" class="text-gray-400 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 rounded px-2 py-1" aria-label="Документация">Документация</a>
-            </div>
-            <button class="px-4 py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-black font-medium rounded-lg hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-400 focus:ring-offset-gray-900" aria-label="Начать работу">
+            <button data-ym-event="click" data-ym-category="CTA" data-ym-label="header" data-ym-goal="registration"
+                    class="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black rounded-lg">
                 Начать
             </button>
         </nav>
     </header>
 
-    <!-- Hero -->
-    <main class="pt-24">
+    <main id="main" class="pt-24">
         <section class="max-w-7xl mx-auto px-4 py-20 text-center">
-            <div class="inline-block px-4 py-1 rounded-full glass text-amber-400 text-sm mb-6">
-                ✨ Новая версия 2.0
-            </div>
-            <h1 class="text-4xl md:text-6xl font-bold mb-6 bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
+            <h1 class="text-4xl md:text-6xl font-bold mb-6 bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
                 Упростите свой<br/>рабочий процесс
             </h1>
-            <p class="text-gray-400 text-lg md:text-xl max-w-2xl mx-auto mb-10">
-                Современный инструмент для команд, которые ценят простоту и эффективность
+            <p class="text-gray-400 text-xl max-w-2xl mx-auto mb-10">
+                Современный инструмент для команд
             </p>
-            <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                <button class="px-8 py-4 bg-gradient-to-r from-amber-400 to-orange-500 text-black font-semibold rounded-xl glow-accent hover:scale-105 transition-transform focus:outline-none focus:ring-2 focus:ring-amber-400" aria-label="Попробовать бесплатно">
-                    Попробовать бесплатно
-                </button>
-                <button class="px-8 py-4 glass rounded-xl hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-white/50" aria-label="Посмотреть демо">
-                    ▶ Посмотреть демо
-                </button>
+            <button data-ym-event="click" data-ym-category="CTA" data-ym-label="hero" data-ym-goal="registration"
+                    class="px-8 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-semibold rounded-xl">
+                Попробовать бесплатно
+            </button>
+        </section>
+
+        <section class="max-w-7xl mx-auto px-4 py-16">
+            <div class="grid md:grid-cols-3 gap-6">
+                <div data-ym-category="features" class="bg-white/5 border border-white/10 rounded-2xl p-6">
+                    <div class="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4">⚡</div>
+                    <h3 class="font-semibold text-lg mb-2">Быстрый старт</h3>
+                    <p class="text-gray-400">Начните за 5 минут</p>
+                </div>
+                <div data-ym-category="features" class="bg-white/5 border border-white/10 rounded-2xl p-6">
+                    <div class="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4">🔒</div>
+                    <h3 class="font-semibold text-lg mb-2">Безопасность</h3>
+                    <p class="text-gray-400">Шифрование данных</p>
+                </div>
+                <div data-ym-category="features" class="bg-white/5 border border-white/10 rounded-2xl p-6">
+                    <div class="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4">🔄</div>
+                    <h3 class="font-semibold text-lg mb-2">Интеграции</h3>
+                    <p class="text-gray-400">Подключение инструментов</p>
+                </div>
             </div>
         </section>
 
-        <!-- Features -->
-        <section class="max-w-7xl mx-auto px-4 py-16">
-            <div class="grid md:grid-cols-3 gap-6">
-                <div class="glass rounded-2xl p-6 hover:bg-white/10 transition-colors">
-                    <div class="w-12 h-12 rounded-xl bg-amber-400/20 flex items-center justify-center mb-4">
-                        <span class="text-2xl">⚡</span>
-                    </div>
-                    <h3 class="font-semibold text-lg mb-2">Быстрый старт</h3>
-                    <p class="text-gray-400">Начните работу за 5 минут без сложной настройки</p>
-                </div>
-                <div class="glass rounded-2xl p-6 hover:bg-white/10 transition-colors">
-                    <div class="w-12 h-12 rounded-xl bg-amber-400/20 flex items-center justify-center mb-4">
-                        <span class="text-2xl">🔒</span>
-                    </div>
-                    <h3 class="font-semibold text-lg mb-2">Безопасность</h3>
-                    <p class="text-gray-400">Шифрование данных и соответствие стандартам</p>
-                </div>
-                <div class="glass rounded-2xl p-6 hover:bg-white/10 transition-colors">
-                    <div class="w-12 h-12 rounded-xl bg-amber-400/20 flex items-center justify-center mb-4">
-                        <span class="text-2xl">🔄</span>
-                    </div>
-                    <h3 class="font-semibold text-lg mb-2">Интеграции</h3>
-                    <p class="text-gray-400">Подключение к вашим любимым инструментам</p>
-                </div>
-            </div>
+        <section class="max-w-2xl mx-auto px-4 py-16">
+            <form data-ym-event="form_submit" data-ym-category="lead" data-ym-goal="contact_form" class="bg-white/5 border border-white/10 rounded-2xl p-8 space-y-4">
+                <h2 class="text-2xl font-bold text-center">Оставьте заявку</h2>
+                <input type="text" placeholder="Имя" data-ym-category="form" class="w-full px-4 py-3 bg-[#0d0d14] border border-white/10 rounded-lg">
+                <input type="email" placeholder="Email" data-ym-category="form" class="w-full px-4 py-3 bg-[#0d0d14] border border-white/10 rounded-lg">
+                <button type="submit" data-ym-event="click" data-ym-category="CTA" data-ym-goal="lead_generation"
+                        class="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-semibold rounded-lg">
+                    Отправить
+                </button>
+            </form>
         </section>
     </main>
 
-    <!-- Footer -->
-    <footer class="border-t border-white/10 mt-20">
-        <div class="max-w-7xl mx-auto px-4 py-8 text-center text-gray-500">
-            <p>© 2025 Product. Все права защищены.</p>
-        </div>
+    <footer class="border-t border-white/10 py-8 text-center text-gray-500">
+        <p>© 2025 Product</p>
     </footer>
 </body>
 </html>
 \`\`\`
 
-### Особенности прототипа:
-- **Техно-стиль:** Тёмный фон, glassmorphism, тонкие линии
-- **Акценты:** Медово-жёлтый (#f5b942) для CTAs и важных элементов
-- **Accessibility:** Фокус-индикаторы, aria-labels, контрастные цвета
-- **Responsive:** Адаптивная сетка для мобильных устройств`;
+### Разметка для Яндекс.Метрики:
+- \`data-ym-event\` — тип события
+- \`data-ym-category\` — категория
+- \`data-ym-label\` — метка
+- \`data-ym-goal\` — цель конверсии`;
   }
 
-  // Default fallback
-  return `Я получил ваш запрос. К сожалению, возникла задержка с обработкой. 
+  // === ТЕСТИРОВАНИЕ ===
+  if (agentType === 'task_architect') {
+    return `## 📋 Комплект для юзабилити-тестирования
 
-Пожалуйста, попробуйте ещё раз или обратитесь к администратору, если проблема повторяется.`;
+---
+
+## 1. 📧 Скрипт приглашения
+
+### Email-рассылка
+
+**Тема:** Приглашение на тестирование нового продукта
+
+---
+
+Уважаемый(ая) [Имя]!
+
+Приглашаем вас на юзабилити-тестирование [Продукт].
+
+**Что тестируем:** Новый интерфейс  
+**Формат:** Онлайн (Zoom)  
+**Длительность:** 30-45 минут  
+**Вознаграждение:** [Сумма] рублей
+
+**Профиль участника:**
+- Возраст: 25-45 лет
+- Опыт с похожими продуктами: от 6 месяцев
+
+**Записаться:** [Ссылка на календарь]
+
+---
+
+### Telegram/WhatsApp
+
+🧪 **Приглашение на тестирование!**
+
+Тестируем [Продукт]. Ищем [описание профиля].
+
+⏱️ Время: 30-45 мин онлайн  
+🎁 Благодарность: [вознаграждение]
+
+Записаться: [ссылка]
+
+---
+
+## 2. 📖 Гайдлайн проведения
+
+### Структура сессии (45 мин)
+
+| Этап | Время | Действие |
+|------|-------|----------|
+| Приветствие | 2 мин | Знакомство, настройка |
+| Введение | 3 мин | Объяснение формата |
+| Предтест | 5 мин | Вопросы о бэкграунде |
+| Задачи | 20 мин | Тестирование |
+| Пост-тест | 10 мин | Впечатления |
+| Завершение | 5 мин | Благодарность |
+
+### Скрипт модератора
+
+> Здравствуйте! Меня зовут [Имя]. Спасибо за участие!
+>
+> Мы тестируем продукт, а не вас. Если что-то не получится — это наша вина.
+>
+> Главное правило: **думайте вслух**. Рассказывайте всё, что видите и думаете.
+
+### Задачи
+
+**Задача 1:** [описание] — 5 мин  
+**Задача 2:** [описание] — 3 мин  
+**Задача 3:** [описание] — 3 мин
+
+### Пост-тест вопросы
+
+1. Какое первое впечатление?
+2. Что было самым простым/сложным?
+3. Что бы вы изменили?
+4. Оцените от 1 до 5
+
+---
+
+## 3. 📊 Критерии оценки
+
+| Метрика | Цель | Измерение |
+|---------|------|-----------|
+| Task Success Rate | > 85% | % выполненных |
+| Time on Task | < 3 мин | Среднее время |
+| SUS Score | > 68 | Шкала 0-100 |
+
+### Severity Rating
+
+| Уровень | Описание |
+|---------|----------|
+| Critical (4) | Блокирует задачу |
+| Major (3) | Серьёзные затруднения |
+| Minor (2) | Небольшие проблемы |
+| Cosmetic (1) | Косметические недочёты |
+
+---
+
+## 4. ✅ Чек-лист
+
+### До теста
+- [ ] Прототип готов
+- [ ] Запись настроена
+- [ ] Скрипт распечатан
+
+### Во время
+- [ ] Участник говорит вслух
+- [ ] Не подсказываю
+- [ ] Веду заметки
+
+### После
+- [ ] Запись сохранена
+- [ ] Благодарность отправлена`;
+  }
+
+  return `Я получил ваш запрос. К сожалению, возникла задержка с обработкой. Попробуйте ещё раз.`;
 }
