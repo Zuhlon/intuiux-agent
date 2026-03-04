@@ -1,7 +1,14 @@
 {
-  "name": "nextjs_tailwind_shadcn_ts",
-  "version": "0.2.0",
-  "private": true,
+  "name": "intuiux-agent",
+  "version": "1.0.0",
+  "private": false,
+  "description": "AI-powered UX Pipeline — Transform transcriptions into interactive prototypes",
+  "author": "IntuiUX Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Zuhlon/intuiux-agent.git"
+  },
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",

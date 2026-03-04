@@ -1,630 +1,664 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Progress } from '@/components/ui/progress';
 import ReactMarkdown from 'react-markdown';
-import { MermaidRenderer } from '@/components/MermaidRenderer';
 import { MessageContent } from '@/components/MessageContent';
 import { 
-  Bot, 
-  MessageSquare, 
+  Upload, 
   Send, 
   Sparkles, 
-  TrendingUp, 
-  AlertTriangle, 
+  FileText, 
+  X, 
+  CheckCircle2,
+  Circle,
+  ArrowRight,
+  Zap,
   Lightbulb,
   BarChart3,
-  RefreshCw,
-  Loader2,
-  ChevronRight,
-  Database,
+  TrendingUp,
   Users,
-  Target
+  Database,
+  ClipboardList,
+  RefreshCw,
+  ExternalLink,
+  Download,
+  Copy,
+  Check
 } from 'lucide-react';
 
-// Типы
-interface Agent {
+// Pipeline stages configuration
+const PIPELINE_STAGES = [
+  {
+    id: 'ideas',
+    name: 'Идеи',
+    fullName: 'Выделение идей для реализации',
+    description: 'Анализ транскрипции и выделение ключевых идей продукта',
+    agent: 'transcription_analyst',
+    icon: Lightbulb,
+    color: 'from-amber-400 to-yellow-500'
+  },
+  {
+    id: 'competitors',
+    name: 'Конкуренты',
+    fullName: 'Анализ конкурентов',
+    description: 'Виртуальный конкурентный анализ рынка',
+    agent: 'brand_marketer',
+    icon: BarChart3,
+    color: 'from-orange-400 to-red-500'
+  },
+  {
+    id: 'cjm',
+    name: 'CJM & IA',
+    fullName: 'Customer Journey Map',
+    description: 'Карта пути пользователя и информационная архитектура',
+    agent: 'cjm_researcher',
+    icon: TrendingUp,
+    color: 'from-emerald-400 to-teal-500'
+  },
+  {
+    id: 'userflow',
+    name: 'Userflow',
+    fullName: 'Сценарии пользователей',
+    description: 'Пользовательские сценарии и потоки',
+    agent: 'ia_architect',
+    icon: Users,
+    color: 'from-blue-400 to-indigo-500'
+  },
+  {
+    id: 'prototype',
+    name: 'Прототип',
+    fullName: 'Интерактивный прототип',
+    description: 'HTML прототип в техно-стиле',
+    agent: 'prototyper',
+    icon: Database,
+    color: 'from-violet-400 to-purple-500'
+  },
+  {
+    id: 'testing',
+    name: 'Тестирование',
+    fullName: 'План юзабилити-тестирования',
+    description: 'План тестирования на основе сценариев',
+    agent: 'task_architect',
+    icon: ClipboardList,
+    color: 'from-pink-400 to-rose-500'
+  }
+];
+
+interface StageResult {
   id: string;
   name: string;
-  type: string;
-  description: string;
-  avatar: string | null;
-  isActive: boolean;
-  _count?: {
-    conversations: number;
-    insights: number;
-    knowledgeBases: number;
-  };
-}
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
+  status: 'pending' | 'processing' | 'completed' | 'error';
   content: string;
-  createdAt: string;
 }
 
-interface Insight {
-  id: string;
-  type: string;
-  title: string;
-  description: string;
-  priority: string;
-  status: string;
-  source?: string;
-}
+export default function UXPipelineApp() {
+  const [inputText, setInputText] = useState('');
+  const [transcriptionFile, setTranscriptionFile] = useState<File | null>(null);
+  const [transcriptionText, setTranscriptionText] = useState<string>('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [currentStage, setCurrentStage] = useState<number>(-1);
+  const [stageResults, setStageResults] = useState<StageResult[]>([]);
+  const [activeResultTab, setActiveResultTab] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const resultsEndRef = useRef<HTMLDivElement>(null);
 
-interface Metric {
-  id: string;
-  name: string;
-  value: number;
-  unit?: string;
-  category: string;
-}
-
-export default function UXAgentsDashboard() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [conversationId, setConversationId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [insights, setInsights] = useState<Insight[]>([]);
-  const [metrics, setMetrics] = useState<Metric[]>([]);
-  const [activeTab, setActiveTab] = useState('agents');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Загрузка агентов
   useEffect(() => {
-    fetchAgents();
-    fetchInsights();
-    fetchMetrics();
-  }, []);
+    resultsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [stageResults, currentStage]);
 
-  // Автоскролл к последнему сообщению
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  const handleFileUpload = async (file: File) => {
+    setTranscriptionFile(file);
+    const text = await file.text();
+    setTranscriptionText(text);
+  };
 
-  const fetchAgents = async () => {
-    try {
-      const res = await fetch('/api/agents');
-      const data = await res.json();
-      if (data.success) {
-        setAgents(data.agents);
-      }
-    } catch (error) {
-      console.error('Error fetching agents:', error);
+  const handleRemoveFile = () => {
+    setTranscriptionFile(null);
+    setTranscriptionText('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
-  const fetchInsights = async () => {
-    try {
-      const res = await fetch('/api/insights');
-      const data = await res.json();
-      if (data.success) {
-        setInsights(data.insights);
-      }
-    } catch (error) {
-      console.error('Error fetching insights:', error);
-    }
-  };
+  const processPipeline = async () => {
+    const fullText = transcriptionText || inputText.trim();
+    if (!fullText) return;
 
-  const fetchMetrics = async () => {
-    try {
-      const res = await fetch('/api/metrics');
-      const data = await res.json();
-      if (data.success) {
-        setMetrics(data.metrics);
-      }
-    } catch (error) {
-      console.error('Error fetching metrics:', error);
-    }
-  };
-
-  const handleSendMessage = async () => {
-    if (!inputMessage.trim() || !selectedAgent || isLoading) return;
-
-    const userMessage = inputMessage.trim();
-    setInputMessage('');
+    setIsProcessing(true);
+    setCurrentStage(0);
     
-    // Добавляем сообщение пользователя сразу
-    const tempUserMsg = {
-      id: 'temp-user-' + Date.now(),
-      role: 'user' as const,
-      content: userMessage,
-      createdAt: new Date().toISOString()
-    };
-    setMessages(prev => [...prev, tempUserMsg]);
-    
-    setIsLoading(true);
+    setStageResults(PIPELINE_STAGES.map(stage => ({
+      id: stage.id,
+      name: stage.name,
+      status: 'pending',
+      content: ''
+    })));
 
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentId: selectedAgent.id,
-          message: userMessage,
-          conversationId
-        })
-      });
+    let accumulatedContext = `ИСХОДНАЯ ТРАНСКРИПЦИЯ:\n${fullText}\n\n`;
+    let conversationId = null;
 
-      // Проверяем, что ответ валидный
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
-      }
+    for (let i = 0; i < PIPELINE_STAGES.length; i++) {
+      const stage = PIPELINE_STAGES[i];
+      setCurrentStage(i);
       
-      const contentType = res.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        throw new Error('Response is not JSON');
-      }
-      
-      const data = await res.json();
-      
-      if (data.success && data.response) {
-        setConversationId(data.conversationId);
+      setStageResults(prev => prev.map((r, idx) => 
+        idx === i ? { ...r, status: 'processing' } : r
+      ));
+
+      try {
+        let prompt = '';
+        switch (stage.id) {
+          case 'ideas':
+            prompt = `Проанализируй транскрипцию и выдели ключевые идеи для реализации продукта.
+
+Для каждой идеи укажи:
+1. Название идеи (кратко, 2-4 слова)
+2. Описание сути (что предлагается)
+3. Ценность для пользователей (зачем это нужно)
+4. Приоритет (P0-критический, P1-высокий, P2-средний, P3-низкий)
+5. Оценка сложности реализации (простая/средняя/сложная)
+
+Транскрипция:
+${fullText}`;
+            break;
+          case 'competitors':
+            prompt = `Проведи виртуальный анализ конкурентов на основе выделенных идей.
+
+Включи:
+1. Прямые конкуренты (3-5) — аналогичные продукты
+2. Косвенные конкуренты (2-3) — альтернативные решения
+3. Сравнительная таблица: функции, цены, UX, сильные/слабые стороны
+4. Возможности дифференциации
+5. Рекомендации по позиционированию
+
+Контекст предыдущего этапа:
+${accumulatedContext}`;
+            break;
+          case 'cjm':
+            prompt = `Построй Customer Journey Map и Информационную архитектуру.
+
+Включи:
+1. Mermaid journey диаграмму пути пользователя
+2. Детальное описание каждого этапа (цель, touchpoints, эмоции, боли)
+3. Mermaid mindmap информационной архитектуры
+4. Ключевые метрики каждого этапа
+
+Используй Mermaid синтаксис для визуализации.
+
+Контекст:
+${accumulatedContext}`;
+            break;
+          case 'userflow':
+            prompt = `Создай детальные пользовательские сценарии и userflow.
+
+Включи:
+1. Основной сценарий (Happy Path) — Mermaid flowchart
+2. Альтернативные сценарии (2-3)
+3. Edge cases и обработка ошибок
+4. Описание экранов (цель, ключевые элементы, действия)
+5. Требования к UX каждого экрана
+
+Контекст:
+${accumulatedContext}`;
+            break;
+          case 'prototype':
+            prompt = `Создай ПОЛНЫЙ интерактивный HTML прототип.
+
+ТРЕБОВАНИЯ К ДИЗАЙНУ (обязательно):
+- Техно-стиль: тёмный фон (#0a0a0f, #0d0d14, #12121a)
+- Текст: белый (#ffffff), серый (#a0a0a0, #6b7280)
+- Акценты: медово-жёлтый (#f5b942, #ffc850), янтарный (#ff9500)
+- Элементы: glassmorphism, тонкие линии (border: 1px solid rgba(255,255,255,0.1))
+- Тени: box-shadow с цветом акцента
+- Шрифты: Inter, system-ui, sans-serif
+- Border-radius: 8px-16px
+
+ACCESSIBILITY (WCAG AA):
+- Контрастность текста минимум 4.5:1
+- Фокус-индикаторы (ring-2 ring-amber-400)
+- aria-labels на всех интерактивных элементах
+- role атрибуты для навигации
+
+АДАПТИВНОСТЬ:
+- Mobile-first подход
+- Responsive grid (grid-cols-1 md:grid-cols-2 lg:grid-cols-3)
+- Touch-friendly кнопки (минимум 44px)
+
+СТРУКТУРА ПРОТОТИПА:
+1. Header с навигацией
+2. Hero секция с CTA
+3. Features секция (3-4 карточки)
+4. Целевая страница/форма (на основе сценария)
+5. Footer
+
+Верни ПОЛНЫЙ HTML код с Tailwind через CDN.
+
+Контекст:
+${accumulatedContext}`;
+            break;
+          case 'testing':
+            prompt = `Создай план юзабилити-тестирования.
+
+Включи:
+1. Цели тестирования (3-5 целей с метриками успеха)
+2. Методология (тип тестирования, инструменты, формат)
+3. Профиль участников (количество, критерии отбора, сегменты)
+4. Сценарии задач (3-5 задач с критериями успеха)
+5. Вопросы для пост-тест интервью (5-7 вопросов)
+6. Метрики для отслеживания (количественные и качественные)
+7. Тайминг проведения (поэтапно)
+8. Критерии приёмки (Definition of Done)
+
+Контекст:
+${accumulatedContext}`;
+            break;
+        }
+
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentType: stage.agent,
+            message: prompt,
+            conversationId
+          })
+        });
+
+        const data = await res.json();
         
-        // Добавляем ответ AI напрямую
-        const aiMessage = {
-          id: 'ai-' + Date.now(),
-          role: 'assistant' as const,
-          content: data.response,
-          createdAt: new Date().toISOString()
-        };
-        setMessages(prev => [...prev, aiMessage]);
-      } else {
-        // Показываем ошибку
-        const errorMessage = {
-          id: 'error-' + Date.now(),
-          role: 'assistant' as const,
-          content: data.error || 'Произошла ошибка. Попробуйте ещё раз.',
-          createdAt: new Date().toISOString()
-        };
-        setMessages(prev => [...prev, errorMessage]);
+        if (data.success && data.response) {
+          conversationId = data.conversationId;
+          accumulatedContext += `\n\n=== ${stage.fullName.toUpperCase()} ===\n${data.response}`;
+          
+          setStageResults(prev => prev.map((r, idx) => 
+            idx === i ? { ...r, status: 'completed', content: data.response } : r
+          ));
+          
+          setActiveResultTab(stage.id);
+        } else {
+          throw new Error(data.error || 'Ошибка обработки');
+        }
+      } catch (error) {
+        console.error(`Error in stage ${stage.id}:`, error);
+        setStageResults(prev => prev.map((r, idx) => 
+          idx === i ? { ...r, status: 'error', content: 'Ошибка при обработке этапа' } : r
+        ));
       }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      // Показываем ошибку в чате
-      const errorMessage = {
-        id: 'error-' + Date.now(),
-        role: 'assistant' as const,
-        content: 'Произошла ошибка при отправке сообщения. Пожалуйста, попробуйте ещё раз.',
-        createdAt: new Date().toISOString()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
     }
+
+    setIsProcessing(false);
+    setCurrentStage(-1);
+    setInputText('');
+    handleRemoveFile();
   };
 
-  const handleSelectAgent = (agent: Agent) => {
-    setSelectedAgent(agent);
-    setMessages([]);
-    setConversationId(null);
-    setActiveTab('chat');
+  const copyToClipboard = async (text: string, id: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopiedCode(id);
+    setTimeout(() => setCopiedCode(null), 2000);
   };
 
-  const getAgentIcon = (type: string) => {
-    switch (type) {
-      case 'persona': return <Users className="w-5 h-5" />;
-      case 'transcription_analyst': return <MessageSquare className="w-5 h-5" />;
-      case 'cjm_researcher': return <TrendingUp className="w-5 h-5" />;
-      case 'ia_architect': return <Database className="w-5 h-5" />;
-      case 'task_architect': return <Target className="w-5 h-5" />;
-      case 'prototyper': return <Sparkles className="w-5 h-5" />;
-      case 'validator': return <BarChart3 className="w-5 h-5" />;
-      default: return <Bot className="w-5 h-5" />;
-    }
+  const downloadHTML = (content: string) => {
+    // Extract HTML from markdown code block
+    const htmlMatch = content.match(/```html\n([\s\S]*?)\n```/);
+    const html = htmlMatch ? htmlMatch[1] : content;
+    
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'prototype.html';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const getInsightIcon = (type: string) => {
-    switch (type) {
-      case 'pain_point': return <AlertTriangle className="w-4 h-4 text-red-500" />;
-      case 'opportunity': return <TrendingUp className="w-4 h-4 text-green-500" />;
-      case 'recommendation': return <Lightbulb className="w-4 h-4 text-yellow-500" />;
-      case 'trend': return <TrendingUp className="w-4 h-4 text-blue-500" />;
-      default: return <Sparkles className="w-4 h-4" />;
-    }
+  const getProgress = () => {
+    if (currentStage < 0) return 0;
+    const completed = stageResults.filter(r => r.status === 'completed').length;
+    return (completed / PIPELINE_STAGES.length) * 100;
   };
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'critical': return 'bg-red-100 text-red-800 border-red-200';
-      case 'high': return 'bg-orange-100 text-orange-800 border-orange-200';
-      case 'medium': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'low': return 'bg-green-100 text-green-800 border-green-200';
-      default: return 'bg-gray-100 text-gray-800 border-gray-200';
-    }
+  const resetPipeline = () => {
+    setStageResults([]);
+    setActiveResultTab(null);
+    setCurrentStage(-1);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
+    <div className="min-h-screen bg-[#0a0a0f] text-white">
+      {/* Background Effects */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-orange-500/10 rounded-full blur-3xl" />
+      </div>
+
       {/* Header */}
-      <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
+      <header className="sticky top-0 z-50 border-b border-white/10 bg-[#0a0a0f]/80 backdrop-blur-xl">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
-                <Bot className="w-6 h-6 text-white" />
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/20">
+                <Zap className="w-6 h-6 text-black" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-slate-900">UX AI Agents</h1>
-                <p className="text-sm text-slate-500">Динамические AI-агенты для UX-исследований</p>
+                <h1 className="text-lg font-bold text-white">IntuiUX Agent</h1>
+                <p className="text-xs text-gray-500 hidden sm:block">AI-powered UX Pipeline</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={fetchAgents}>
+            
+            {stageResults.length > 0 && !isProcessing && (
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={resetPipeline}
+                className="border-white/10 bg-white/5 hover:bg-white/10 text-white"
+              >
                 <RefreshCw className="w-4 h-4 mr-2" />
-                Обновить
+                Новый анализ
               </Button>
-            </div>
+            )}
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-6">
-        {/* Metrics Overview */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-          {metrics.map((metric) => (
-            <Card key={metric.id} className="bg-white/60 backdrop-blur-sm">
-              <CardContent className="p-4">
-                <div className="text-xs text-slate-500 mb-1">{metric.name}</div>
-                <div className="text-2xl font-bold text-slate-900">
-                  {metric.value}{metric.unit}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <main className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Input Section */}
+        {stageResults.length === 0 && (
+          <div className="max-w-3xl mx-auto">
+            {/* Hero */}
+            <div className="text-center mb-12">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 border border-white/10 text-amber-400 text-sm mb-6">
+                <Sparkles className="w-4 h-4" />
+                Транскрипция → Прототип за минуты
+              </div>
+              <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+                От идеи до прототипа
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-500"> одним кликом</span>
+              </h2>
+              <p className="text-gray-400 text-lg max-w-xl mx-auto">
+                Загрузите транскрипцию интервью или описания продукта — AI создаст полный UX пайплайн
+              </p>
+            </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Panel - Agents & Insights */}
-          <div className="lg:col-span-1 space-y-6">
-            {/* Agents */}
-            <Card className="bg-white/60 backdrop-blur-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Bot className="w-5 h-5 text-violet-500" />
-                  AI-Агенты
-                </CardTitle>
-                <CardDescription>
-                  Выберите агента для диалога
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {agents.map((agent) => (
-                  <div
-                    key={agent.id}
-                    onClick={() => handleSelectAgent(agent)}
-                    className={`p-3 rounded-lg cursor-pointer transition-all ${
-                      selectedAgent?.id === agent.id
-                        ? 'bg-violet-100 border-2 border-violet-300'
-                        : 'bg-white hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Avatar className="w-10 h-10">
-                        <AvatarFallback className="bg-gradient-to-br from-violet-500 to-purple-600 text-white">
-                          {agent.avatar || getAgentIcon(agent.type)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-slate-900 truncate">{agent.name}</div>
-                        <div className="text-xs text-slate-500 truncate">{agent.description}</div>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-slate-400" />
-                    </div>
-                    {agent._count && (
-                      <div className="flex gap-2 mt-2 text-xs text-slate-500">
-                        <span>💬 {agent._count.conversations}</span>
-                        <span>💡 {agent._count.insights}</span>
-                        <span>📚 {agent._count.knowledgeBases}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-
-            {/* Insights */}
-            <Card className="bg-white/60 backdrop-blur-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Lightbulb className="w-5 h-5 text-yellow-500" />
-                  Инсайты
-                </CardTitle>
-                <CardDescription>
-                  Ключевые находки и рекомендации
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ScrollArea className="h-[300px]">
-                  <div className="space-y-3">
-                    {insights.map((insight) => (
-                      <div
-                        key={insight.id}
-                        className="p-3 bg-white rounded-lg border border-slate-200"
-                      >
-                        <div className="flex items-start gap-2">
-                          {getInsightIcon(insight.type)}
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-sm text-slate-900">
-                              {insight.title}
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1 line-clamp-2">
-                              {insight.description}
-                            </div>
-                            <div className="flex gap-2 mt-2">
-                              <Badge variant="outline" className={`text-xs ${getPriorityColor(insight.priority)}`}>
-                                {insight.priority}
-                              </Badge>
-                              {insight.source && (
-                                <Badge variant="outline" className="text-xs">
-                                  {insight.source}
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Right Panel - Chat */}
-          <div className="lg:col-span-2">
-            <Card className="bg-white/60 backdrop-blur-sm h-[calc(100vh-300px)] flex flex-col">
-              <CardHeader className="pb-3 border-b">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    {selectedAgent ? (
-                      <>
-                        <Avatar className="w-10 h-10">
-                          <AvatarFallback className="bg-gradient-to-br from-violet-500 to-purple-600 text-white">
-                            {selectedAgent.avatar || getAgentIcon(selectedAgent.type)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <CardTitle className="text-lg">{selectedAgent.name}</CardTitle>
-                          <CardDescription>{selectedAgent.description}</CardDescription>
-                        </div>
-                      </>
-                    ) : (
-                      <div>
-                        <CardTitle className="text-lg">Выберите агента</CardTitle>
-                        <CardDescription>Начните диалог с AI-агентом</CardDescription>
-                      </div>
-                    )}
-                  </div>
-                  {selectedAgent && (
-                    <Badge variant="secondary" className="bg-green-100 text-green-800">
-                      Активен
-                    </Badge>
-                  )}
-                </div>
-              </CardHeader>
-              
-              <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
-                {selectedAgent ? (
-                  <>
-                    {/* Messages */}
-                    <div className="flex-1 overflow-y-auto p-4 min-h-0" style={{ maxHeight: 'calc(100vh - 380px)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                      {messages.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-100 to-purple-200 flex items-center justify-center mb-4">
-                            <MessageSquare className="w-8 h-8 text-violet-500" />
-                          </div>
-                          <h3 className="font-medium text-slate-900 mb-2">
-                            Начните диалог с {selectedAgent.name}
-                          </h3>
-                          <p className="text-sm text-slate-500 max-w-md">
-                            Задайте вопрос о пользователях, попросите проанализировать данные или предложите гипотезу для проверки.
-                          </p>
-                          <div className="mt-6 grid grid-cols-1 gap-2 w-full max-w-md">
-                            {selectedAgent.type === 'persona' && (
-                              <>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Что ты думаешь о новом интерфейсе корзины?')}>
-                                  Что ты думаешь о новом интерфейсе корзины?
-                                </Button>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Какие у тебя основные боли при использовании продукта?')}>
-                                  Какие у тебя основные боли при использовании продукта?
-                                </Button>
-                              </>
-                            )}
-                            {selectedAgent.type === 'transcription_analyst' && (
-                              <>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Проанализируй эту транскрипцию разговора')}>
-                                  Проанализируй транскрипцию разговора
-                                </Button>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Выдели ключевые боли из этого текста')}>
-                                  Выдели ключевые боли
-                                </Button>
-                              </>
-                            )}
-                            {selectedAgent.type === 'cjm_researcher' && (
-                              <>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Построй CJM для интернет-магазина')}>
-                                  Построй CJM для интернет-магазина
-                                </Button>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Покажи воронку конверсии')}>
-                                  Покажи воронку конверсии
-                                </Button>
-                              </>
-                            )}
-                            {selectedAgent.type === 'ia_architect' && (
-                              <>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Построй информационную архитектуру для e-commerce')}>
-                                  Построй IA для e-commerce
-                                </Button>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Создай userflow для оформления заказа')}>
-                                  Создай userflow оформления заказа
-                                </Button>
-                              </>
-                            )}
-                            {selectedAgent.type === 'task_architect' && (
-                              <>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Составь ТЗ для компонента корзины')}>
-                                  Составь ТЗ для корзины
-                                </Button>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Напиши Gherkin сценарии для формы оплаты')}>
-                                  Gherkin для формы оплаты
-                                </Button>
-                              </>
-                            )}
-                            {selectedAgent.type === 'prototyper' && (
-                              <>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Создай HTML прототип страницы товара')}>
-                                  Прототип страницы товара
-                                </Button>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Создай прототип формы оформления заказа')}>
-                                  Прототип формы заказа
-                                </Button>
-                              </>
-                            )}
-                            {selectedAgent.type === 'validator' && (
-                              <>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Проверь гипотезу: упрощение формы оплаты повысит конверсию на 15%')}>
-                                  Проверь гипотезу о конверсии
-                                </Button>
-                                <Button variant="outline" className="justify-start" onClick={() => setInputMessage('Какие риски есть у нашего плана по редизайну?')}>
-                                  Риски редизайна
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {messages.map((message) => (
-                            <div
-                              key={message.id}
-                              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                            >
-                              <div
-                                className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                                  message.role === 'user'
-                                    ? 'bg-violet-500 text-white'
-                                    : 'bg-slate-100 text-slate-900'
-                                }`}
-                              >
-                                {message.role === 'user' ? (
-                                  <p className="text-sm whitespace-pre-wrap" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere', hyphens: 'auto' }}>{message.content}</p>
-                                ) : (
-                                  <div className="text-sm" style={{ wordBreak: 'break-word' }}>
-                                    <MessageContent content={message.content} />
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                          {isLoading && (
-                            <div className="flex justify-start">
-                              <div className="bg-slate-100 rounded-2xl px-4 py-2">
-                                <Loader2 className="w-4 h-4 animate-spin text-violet-500" />
-                              </div>
-                            </div>
-                          )}
-                          <div ref={messagesEndRef} />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Input */}
-                    <div className="p-4 border-t">
-                      <div className="flex gap-2">
-                        <Input
-                          placeholder="Напишите сообщение..."
-                          value={inputMessage}
-                          onChange={(e) => setInputMessage(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                          className="flex-1"
-                        />
-                        <Button
-                          onClick={handleSendMessage}
-                          disabled={!inputMessage.trim() || isLoading}
-                          className="bg-violet-500 hover:bg-violet-600"
-                        >
-                          <Send className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex-1 flex items-center justify-center p-8">
-                    <div className="text-center">
-                      <div className="w-20 h-20 rounded-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center mx-auto mb-4">
-                        <Bot className="w-10 h-10 text-slate-400" />
-                      </div>
-                      <h3 className="font-medium text-slate-900 mb-2">
-                        Выберите AI-агента
-                      </h3>
-                      <p className="text-sm text-slate-500 max-w-md">
-                        Выберите агента слева, чтобы начать диалог о пользователях и UX-исследованиях.
-                      </p>
-                    </div>
+            {/* Upload Card */}
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm">
+              {/* File Upload */}
+              <div className="flex items-center gap-3 mb-4">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.md,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleFileUpload(file);
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400"
+                >
+                  <Upload className="w-4 h-4 mr-2" />
+                  Загрузить файл
+                </Button>
+                
+                {transcriptionFile && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 rounded-full border border-amber-500/30">
+                    <FileText className="w-4 h-4 text-amber-400" />
+                    <span className="text-sm text-amber-300 max-w-[200px] truncate">
+                      {transcriptionFile.name}
+                    </span>
+                    <button
+                      onClick={handleRemoveFile}
+                      className="w-5 h-5 rounded-full bg-amber-500/20 hover:bg-amber-500/30 flex items-center justify-center transition-colors"
+                      aria-label="Удалить файл"
+                    >
+                      <X className="w-3 h-3 text-amber-400" />
+                    </button>
                   </div>
                 )}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-
-        {/* Knowledge Base Section */}
-        <div className="mt-6">
-          <Card className="bg-white/60 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Database className="w-5 h-5 text-blue-500" />
-                База знаний
-              </CardTitle>
-              <CardDescription>
-                Данные для обучения AI-агентов
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="p-4 bg-white rounded-lg border border-slate-200">
-                  <div className="text-2xl font-bold text-violet-600">5</div>
-                  <div className="text-sm text-slate-500">UX-тренды 2025</div>
-                </div>
-                <div className="p-4 bg-white rounded-lg border border-slate-200">
-                  <div className="text-2xl font-bold text-orange-600">42%</div>
-                  <div className="text-sm text-slate-500">Жалоб на навигацию</div>
-                </div>
-                <div className="p-4 bg-white rounded-lg border border-slate-200">
-                  <div className="text-2xl font-bold text-green-600">67%</div>
-                  <div className="text-sm text-slate-500">Уходят при сложной форме</div>
-                </div>
-                <div className="p-4 bg-white rounded-lg border border-slate-200">
-                  <div className="text-2xl font-bold text-blue-600">65%</div>
-                  <div className="text-sm text-slate-500">Мобильный трафик</div>
-                </div>
               </div>
-            </CardContent>
-          </Card>
-        </div>
+
+              {/* Text Input */}
+              <Textarea
+                placeholder={transcriptionText ? "Текст загружен из файла..." : "Или вставьте текст транскрипции / описания продукта здесь..."}
+                value={transcriptionText ? '' : inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                disabled={!!transcriptionText}
+                className="min-h-[200px] bg-[#0d0d14] border-white/10 focus:border-amber-500/50 text-white placeholder:text-gray-600 resize-none"
+              />
+
+              {/* Pipeline Preview */}
+              <div className="flex flex-wrap items-center gap-2 mt-4 text-xs text-gray-500">
+                {PIPELINE_STAGES.map((stage, idx) => {
+                  const IconComponent = stage.icon;
+                  return (
+                    <div key={stage.id} className="flex items-center gap-1">
+                      <div className={`w-5 h-5 rounded bg-gradient-to-br ${stage.color} flex items-center justify-center`}>
+                        <IconComponent className="w-3 h-3 text-white" />
+                      </div>
+                      <span>{stage.name}</span>
+                      {idx < PIPELINE_STAGES.length - 1 && <ArrowRight className="w-3 h-3" />}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Start Button */}
+              <Button
+                onClick={processPipeline}
+                disabled={(!inputText.trim() && !transcriptionText) || isProcessing}
+                className="w-full mt-6 h-12 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-black font-semibold rounded-xl shadow-lg shadow-amber-500/20 transition-all hover:shadow-amber-500/30 disabled:opacity-50"
+              >
+                {isProcessing ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 mr-2 animate-spin" />
+                    Обработка...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-5 h-5 mr-2" />
+                    Запустить анализ
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Processing State */}
+        {isProcessing && stageResults.length > 0 && (
+          <div className="max-w-3xl mx-auto mb-8">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-white">Обработка</h3>
+                <span className="text-sm text-gray-400">
+                  {stageResults.filter(r => r.status === 'completed').length} / {PIPELINE_STAGES.length}
+                </span>
+              </div>
+              <Progress value={getProgress()} className="h-2 bg-white/10" />
+              <p className="text-sm text-amber-400 mt-3">
+                {currentStage >= 0 ? PIPELINE_STAGES[currentStage]?.fullName : 'Подготовка...'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Results Section */}
+        {stageResults.length > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            {/* Sidebar - Pipeline Stages */}
+            <div className="lg:col-span-1">
+              <div className="sticky top-24 space-y-2">
+                {PIPELINE_STAGES.map((stage, idx) => {
+                  const result = stageResults[idx];
+                  const IconComponent = stage.icon;
+                  
+                  return (
+                    <button
+                      key={stage.id}
+                      onClick={() => result?.status === 'completed' && setActiveResultTab(stage.id)}
+                      disabled={result?.status !== 'completed'}
+                      className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left ${
+                        activeResultTab === stage.id 
+                          ? 'bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/30' 
+                          : result?.status === 'completed'
+                            ? 'hover:bg-white/5 cursor-pointer border border-transparent'
+                            : 'opacity-50 cursor-not-allowed border border-transparent'
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${stage.color} flex items-center justify-center shrink-0`}>
+                        {result?.status === 'processing' ? (
+                          <RefreshCw className="w-4 h-4 text-white animate-spin" />
+                        ) : result?.status === 'completed' ? (
+                          <CheckCircle2 className="w-4 h-4 text-white" />
+                        ) : result?.status === 'error' ? (
+                          <Circle className="w-4 h-4 text-red-400" />
+                        ) : (
+                          <IconComponent className="w-4 h-4 text-white" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-white truncate">
+                          {stage.name}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {result?.status === 'processing' ? 'Обработка...' :
+                           result?.status === 'completed' ? 'Готово' :
+                           result?.status === 'error' ? 'Ошибка' : 'Ожидание'}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+                
+                {/* Actions */}
+                {!isProcessing && stageResults.every(r => r.status === 'completed') && (
+                  <div className="pt-4 border-t border-white/10 mt-4 space-y-2">
+                    <Button 
+                      variant="outline" 
+                      className="w-full border-white/10 bg-white/5 hover:bg-white/10 text-white"
+                      onClick={resetPipeline}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Новый анализ
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Content Area */}
+            <div className="lg:col-span-3">
+              {activeResultTab && (
+                <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden">
+                  {/* Header */}
+                  <div className="border-b border-white/10 p-4 sm:p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        {(() => {
+                          const stage = PIPELINE_STAGES.find(s => s.id === activeResultTab);
+                          const IconComponent = stage?.icon || Sparkles;
+                          return (
+                            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${stage?.color || 'from-gray-400 to-gray-500'} flex items-center justify-center`}>
+                              <IconComponent className="w-5 h-5 text-white" />
+                            </div>
+                          );
+                        })()}
+                        <div>
+                          <h3 className="font-semibold text-white">
+                            {PIPELINE_STAGES.find(s => s.id === activeResultTab)?.fullName}
+                          </h3>
+                          <p className="text-sm text-gray-500">
+                            {PIPELINE_STAGES.find(s => s.id === activeResultTab)?.description}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      {/* Actions */}
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const content = stageResults.find(r => r.id === activeResultTab)?.content || '';
+                            copyToClipboard(content, activeResultTab);
+                          }}
+                          className="border-white/10 bg-white/5 hover:bg-white/10 text-white"
+                        >
+                          {copiedCode === activeResultTab ? (
+                            <Check className="w-4 h-4 mr-2 text-green-400" />
+                          ) : (
+                            <Copy className="w-4 h-4 mr-2" />
+                          )}
+                          Копировать
+                        </Button>
+                        
+                        {activeResultTab === 'prototype' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => downloadHTML(stageResults.find(r => r.id === 'prototype')?.content || '')}
+                            className="border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400"
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            Скачать HTML
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Content */}
+                  <ScrollArea className="h-[calc(100vh-280px)]">
+                    <div className="p-4 sm:p-6">
+                      <div className="prose prose-invert prose-sm max-w-none 
+                        prose-headings:text-white prose-headings:font-semibold
+                        prose-h2:text-xl prose-h2:border-b prose-h2:border-white/10 prose-h2:pb-2
+                        prose-h3:text-lg prose-h3:text-gray-200
+                        prose-p:text-gray-300 prose-p:leading-relaxed
+                        prose-li:text-gray-300
+                        prose-strong:text-white
+                        prose-code:text-amber-400 prose-code:bg-white/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
+                        prose-pre:bg-[#0d0d14] prose-pre:border prose-pre:border-white/10 prose-pre:rounded-xl
+                        prose-table:border-collapse
+                        prose-th:bg-white/5 prose-th:text-white prose-th:p-3 prose-th:border prose-th:border-white/10
+                        prose-td:p-3 prose-td:border prose-td:border-white/10 prose-td:text-gray-300
+                        prose-a:text-amber-400 prose-a:no-underline hover:prose-a:underline
+                        prose-hr:border-white/10"
+                      >
+                        <MessageContent content={stageResults.find(r => r.id === activeResultTab)?.content || ''} />
+                      </div>
+                    </div>
+                    <div ref={resultsEndRef} />
+                  </ScrollArea>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Footer */}
-      <footer className="border-t bg-white/80 backdrop-blur-sm mt-8">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between text-sm text-slate-500">
+      <footer className="border-t border-white/10 mt-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-violet-500" />
-              <span>Powered by Z.ai LLM</span>
+              <div className="w-6 h-6 rounded bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center">
+                <Zap className="w-4 h-4 text-black" />
+              </div>
+              <span>IntuiUX Agent © 2025</span>
             </div>
-            <div>
-              От артефактов к AI-агентам — методология UX 2025
+            <div className="hidden md:flex items-center gap-4">
+              <span>Powered by Z.ai LLM</span>
+              <span className="text-gray-600">•</span>
+              <span>Made with AI</span>
             </div>
           </div>
         </div>
