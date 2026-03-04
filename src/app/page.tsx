@@ -31,8 +31,8 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Sitemap,
-  TestTube
+  Network,
+  FlaskConical
 } from 'lucide-react';
 
 // Pipeline stages configuration - 7 stages now (CJM and IA separated)
@@ -70,7 +70,7 @@ const PIPELINE_STAGES = [
     fullName: 'Информационная архитектура',
     description: 'Структура продукта с таксономиями сущностей',
     agent: 'ia_architect',
-    icon: Sitemap,
+    icon: Network,
     color: 'from-cyan-400 to-blue-500'
   },
   {
@@ -97,7 +97,7 @@ const PIPELINE_STAGES = [
     fullName: 'Юзабилити-тестирование',
     description: 'Скрипт приглашения и гайдлайн проведения',
     agent: 'task_architect',
-    icon: TestTube,
+    icon: FlaskConical,
     color: 'from-pink-400 to-rose-500'
   }
 ];
