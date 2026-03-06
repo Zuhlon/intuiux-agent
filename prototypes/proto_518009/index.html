@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>**Сервис онлайн-записи для салонов**</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --neon-cyan: #00ffff;
+            --neon-magenta: #ff00ff;
+            --neon-green: #00ff00;
+            --dark-bg: #0a0a0f;
+        }
+        * { font-family: 'Rajdhani', sans-serif; }
+        .font-orbitron { font-family: 'Orbitron', monospace; }
+        
+        /* Scan lines effect */
+        .scanlines::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.1) 0px,
+                rgba(0, 0, 0, 0.1) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+        
+        /* Neon glow */
+        .neon-glow {
+            box-shadow: 0 0 5px var(--neon-cyan), 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan);
+        }
+        .neon-text {
+            text-shadow: 0 0 5px var(--neon-cyan), 0 0 10px var(--neon-cyan);
+        }
+        .neon-magenta {
+            box-shadow: 0 0 5px var(--neon-magenta), 0 0 10px var(--neon-magenta);
+        }
+        
+        /* Glitch effect */
+        @keyframes glitch {
+            0%, 90%, 100% { transform: translate(0); }
+            92% { transform: translate(-2px, 2px); }
+            94% { transform: translate(2px, -2px); }
+            96% { transform: translate(-2px, -2px); }
+            98% { transform: translate(2px, 2px); }
+        }
+        .glitch:hover { animation: glitch 0.3s infinite; }
+        
+        /* Pulse animation */
+        @keyframes pulse-neon {
+            0%, 100% { opacity: 1; box-shadow: 0 0 5px var(--neon-cyan), 0 0 10px var(--neon-cyan); }
+            50% { opacity: 0.8; box-shadow: 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan), 0 0 30px var(--neon-cyan); }
+        }
+        .pulse-neon { animation: pulse-neon 2s infinite; }
+        
+        /* Glass effect */
+        .glass {
+            background: rgba(10, 10, 15, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 255, 255, 0.2);
+        }
+        
+        /* Screen transitions */
+        .screen { display: none; opacity: 0; transition: opacity 0.3s; }
+        .screen.active { display: block; opacity: 1; }
+        
+        /* Slide animations */
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .slide-in { animation: slideIn 0.4s ease-out; }
+    </style>
+</head>
+<body class="min-h-screen bg-gradient-to-b from-[#0a0a0f] via-[#0f0f1a] to-[#0a0a0f] text-white scanlines">
+    
+    <!-- Splash Screen -->
+    <div id="splash" class="screen active fixed inset-0 flex flex-col items-center justify-center z-50 bg-[#0a0a0f]">
+        <div class="text-center">
+            <div class="w-24 h-24 mx-auto mb-6 rounded-full border-2 border-cyan-400 flex items-center justify-center pulse-neon">
+                <span class="text-4xl">⚡</span>
+            </div>
+            <h1 class="font-orbitron text-3xl md:text-5xl font-bold neon-text mb-4">**Сервис онлайн-записи для салонов**</h1>
+            <p class="text-gray-400 text-lg mb-8">Инновационный продукт для решения задач пользователей</p>
+            <button onclick="showScreen('onboarding')" class="px-8 py-4 bg-transparent border-2 border-cyan-400 text-cyan-400 font-orbitron rounded-lg neon-glow hover:bg-cyan-400 hover:text-black transition-all glitch">
+                НАЧАТЬ
+            </button>
+        </div>
+    </div>
+
+    <!-- Onboarding -->
+    <div id="onboarding" class="screen fixed inset-0 flex flex-col items-center justify-center z-40 bg-[#0a0a0f]/95 p-4">
+        <div class="max-w-md w-full text-center">
+            <div class="mb-2 text-cyan-400 font-orbitron text-sm">ШАГ <span id="step-num">1</span> ИЗ 3</div>
+            <div class="w-full h-1 bg-gray-800 rounded mb-8">
+                <div id="progress" class="h-full bg-gradient-to-r from-cyan-400 to-magenta-400 rounded transition-all" style="width: 33%"></div>
+            </div>
+            
+            <div id="step1" class="step-content">
+                <div class="w-20 h-20 mx-auto mb-6 rounded-2xl glass flex items-center justify-center text-4xl">🚀</div>
+                <h2 class="font-orbitron text-2xl font-bold mb-4">Количество онлайн-записей vs телефонных </h2>
+                <p class="text-gray-400 mb-8">Быстрый и удобный доступ к основным функциям</p>
+            </div>
+            
+            <div id="step2" class="step-content hidden">
+                <div class="w-20 h-20 mx-auto mb-6 rounded-2xl glass flex items-center justify-center text-4xl">🔐</div>
+                <h2 class="font-orbitron text-2xl font-bold mb-4">Процент неявок — цель: менее 5%</h2>
+                <p class="text-gray-400 mb-8">Безопасность данных на первом месте</p>
+            </div>
+            
+            <div id="step3" class="step-content hidden">
+                <div class="w-20 h-20 mx-auto mb-6 rounded-2xl glass flex items-center justify-center text-4xl">⚡</div>
+                <h2 class="font-orbitron text-2xl font-bold mb-4">Среднее время записи клиента — цель: мен</h2>
+                <p class="text-gray-400 mb-8">Мгновенные результаты</p>
+            </div>
+            
+            <div class="flex gap-4">
+                <button onclick="prevStep()" id="prevBtn" class="flex-1 py-3 border border-gray-600 text-gray-400 rounded-lg hover:border-cyan-400 hover:text-cyan-400 transition-all">НАЗАД</button>
+                <button onclick="nextStep()" id="nextBtn" class="flex-1 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 text-black font-bold rounded-lg hover:from-cyan-400 hover:to-blue-400 transition-all">ДАЛЕЕ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="main-app" class="screen">
+        <!-- Header -->
+        <header class="fixed top-0 left-0 right-0 z-30 glass">
+            <nav class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center neon-glow">
+                        <span class="text-black font-bold">⚡</span>
+                    </div>
+                    <span class="font-orbitron font-bold text-lg">**Сервис онлайн-записи для салонов**</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="showScreen('profile')" class="p-2 rounded-lg hover:bg-white/10 transition-all">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+                    </button>
+                </div>
+            </nav>
+        </header>
+
+        <!-- Dashboard -->
+        <main class="pt-20 pb-24 px-4">
+            <div class="max-w-7xl mx-auto">
+                <!-- Welcome -->
+                <section class="mb-8">
+                    <h1 class="font-orbitron text-2xl md:text-3xl font-bold neon-text mb-2">Добро пожаловать</h1>
+                    <p class="text-gray-400">Инновационный продукт для решения задач пользователей</p>
+                </section>
+
+                <!-- Quick Actions -->
+                <section class="mb-8">
+                    <h2 class="font-orbitron text-lg mb-4 text-cyan-400">БЫСТРЫЕ ДЕЙСТВИЯ</h2>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <button onclick="showScreen('action')" class="glass p-6 rounded-xl text-center hover:border-cyan-400 transition-all group">
+                            <div class="w-12 h-12 mx-auto mb-3 rounded-xl bg-cyan-500/20 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">⚡</div>
+                            <span class="font-bold">Количество онлайн-за</span>
+                        </button>
+                        <button class="glass p-6 rounded-xl text-center hover:border-magenta-400 transition-all group">
+                            <div class="w-12 h-12 mx-auto mb-3 rounded-xl bg-pink-500/20 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">📊</div>
+                            <span class="font-bold">Статистика</span>
+                        </button>
+                        <button class="glass p-6 rounded-xl text-center hover:border-green-400 transition-all group">
+                            <div class="w-12 h-12 mx-auto mb-3 rounded-xl bg-green-500/20 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">📅</div>
+                            <span class="font-bold">История</span>
+                        </button>
+                        <button class="glass p-6 rounded-xl text-center hover:border-yellow-400 transition-all group">
+                            <div class="w-12 h-12 mx-auto mb-3 rounded-xl bg-yellow-500/20 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">⚙️</div>
+                            <span class="font-bold">Настройки</span>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Features -->
+                <section>
+                    <h2 class="font-orbitron text-lg mb-4 text-magenta-400">ВОЗМОЖНОСТИ</h2>
+                    <div class="space-y-4">
+                        <div class="glass p-4 rounded-xl flex items-center gap-4 hover:border-cyan-400 transition-all cursor-pointer">
+                            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center text-xl">🎯</div>
+                            <div class="flex-1">
+                                <h3 class="font-bold">Количество онлайн-записей vs т</h3>
+                                <p class="text-gray-400 text-sm">Инновационный продукт для решения задач пользовате</p>
+                            </div>
+                            <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </div>
+                        <div class="glass p-4 rounded-xl flex items-center gap-4 hover:border-magenta-400 transition-all cursor-pointer">
+                            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-pink-500 to-purple-500 flex items-center justify-center text-xl">🔒</div>
+                            <div class="flex-1">
+                                <h3 class="font-bold">Процент неявок — цель: менее 5</h3>
+                                <p class="text-gray-400 text-sm">Безопасность и контроль</p>
+                            </div>
+                            <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </div>
+                        <div class="glass p-4 rounded-xl flex items-center gap-4 hover:border-green-400 transition-all cursor-pointer">
+                            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center text-xl">📈</div>
+                            <div class="flex-1">
+                                <h3 class="font-bold">Среднее время записи клиента —</h3>
+                                <p class="text-gray-400 text-sm">Отслеживание результатов</p>
+                            </div>
+                            <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- Bottom Nav -->
+        <nav class="fixed bottom-0 left-0 right-0 z-30 glass border-t border-white/10">
+            <div class="max-w-md mx-auto flex justify-around py-3">
+                <button class="flex flex-col items-center text-cyan-400">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                    <span class="text-xs mt-1">Главная</span>
+                </button>
+                <button onclick="showScreen('action')" class="flex flex-col items-center text-gray-400 hover:text-cyan-400 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                    <span class="text-xs mt-1">Действие</span>
+                </button>
+                <button onclick="showScreen('profile')" class="flex flex-col items-center text-gray-400 hover:text-cyan-400 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+                    <span class="text-xs mt-1">Профиль</span>
+                </button>
+            </div>
+        </nav>
+    </div>
+
+    <!-- Action Screen -->
+    <div id="action" class="screen">
+        <header class="fixed top-0 left-0 right-0 z-30 glass">
+            <nav class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+                <button onclick="showScreen('main-app')" class="p-2 rounded-lg hover:bg-white/10">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                </button>
+                <span class="font-orbitron font-bold">Количество онлайн-записей vs т</span>
+            </nav>
+        </header>
+        
+        <main class="pt-20 pb-8 px-4">
+            <div class="max-w-md mx-auto">
+                <div class="glass p-6 rounded-xl mb-6">
+                    <h2 class="font-orbitron text-xl mb-4 neon-text">Выполнить действие</h2>
+                    <form id="actionForm" class="space-y-4">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-2">Название</label>
+                            <input type="text" class="w-full px-4 py-3 bg-black/50 border border-cyan-400/30 rounded-lg focus:border-cyan-400 focus:outline-none transition-all" placeholder="Введите данные">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-2">Категория</label>
+                            <select class="w-full px-4 py-3 bg-black/50 border border-cyan-400/30 rounded-lg focus:border-cyan-400 focus:outline-none">
+                                <option>Категория 1</option>
+                                <option>Категория 2</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-500 text-black font-orbitron font-bold rounded-lg neon-glow hover:from-cyan-400 hover:to-blue-400 transition-all">
+                            ВЫПОЛНИТЬ
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Profile Screen -->
+    <div id="profile" class="screen">
+        <header class="fixed top-0 left-0 right-0 z-30 glass">
+            <nav class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+                <button onclick="showScreen('main-app')" class="p-2 rounded-lg hover:bg-white/10">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                </button>
+                <span class="font-orbitron font-bold">Профиль</span>
+            </nav>
+        </header>
+        
+        <main class="pt-20 pb-8 px-4">
+            <div class="max-w-md mx-auto text-center">
+                <div class="w-24 h-24 mx-auto mb-4 rounded-full border-2 border-cyan-400 flex items-center justify-center text-4xl neon-glow">
+                    👤
+                </div>
+                <h2 class="font-orbitron text-xl mb-2">Пользователь</h2>
+                <p class="text-gray-400 mb-8">user@example.com</p>
+                
+                <div class="glass p-4 rounded-xl mb-4 text-left flex items-center gap-4">
+                    <span class="text-2xl">⚙️</span>
+                    <span>Настройки аккаунта</span>
+                </div>
+                <div class="glass p-4 rounded-xl mb-4 text-left flex items-center gap-4">
+                    <span class="text-2xl">🔔</span>
+                    <span>Уведомления</span>
+                </div>
+                <div class="glass p-4 rounded-xl mb-4 text-left flex items-center gap-4">
+                    <span class="text-2xl">🌙</span>
+                    <span>Тёмная тема</span>
+                    <div class="ml-auto w-12 h-6 bg-cyan-500 rounded-full relative">
+                        <div class="absolute right-1 top-1 w-4 h-4 bg-white rounded-full"></div>
+                    </div>
+                </div>
+                <button onclick="showScreen('splash')" class="w-full py-3 border border-red-500 text-red-500 rounded-lg hover:bg-red-500 hover:text-white transition-all mt-4">
+                    Выйти
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-24 left-4 right-4 max-w-md mx-auto glass p-4 rounded-xl flex items-center gap-3 transform translate-y-full opacity-0 transition-all z-50">
+        <div class="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center">✓</div>
+        <div>
+            <div class="font-bold">Успешно!</div>
+            <div class="text-sm text-gray-400">Действие выполнено</div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 1;
+        const totalSteps = 3;
+
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            const screen = document.getElementById(screenId);
+            if (screen) {
+                screen.classList.add('active');
+                screen.classList.add('slide-in');
+            }
+        }
+
+        function nextStep() {
+            if (currentStep < totalSteps) {
+                document.getElementById('step' + currentStep).classList.add('hidden');
+                currentStep++;
+                document.getElementById('step' + currentStep).classList.remove('hidden');
+                document.getElementById('step-num').textContent = currentStep;
+                document.getElementById('progress').style.width = (currentStep / totalSteps * 100) + '%';
+                document.getElementById('prevBtn').classList.remove('opacity-50');
+            } else {
+                showScreen('main-app');
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 1) {
+                document.getElementById('step' + currentStep).classList.add('hidden');
+                currentStep--;
+                document.getElementById('step' + currentStep).classList.remove('hidden');
+                document.getElementById('step-num').textContent = currentStep;
+                document.getElementById('progress').style.width = (currentStep / totalSteps * 100) + '%';
+            }
+            if (currentStep === 1) {
+                document.getElementById('prevBtn').classList.add('opacity-50');
+            }
+        }
+
+        function showToast() {
+            const toast = document.getElementById('toast');
+            toast.classList.remove('translate-y-full', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-full', 'opacity-0');
+            }, 3000);
+        }
+
+        document.getElementById('actionForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            showToast();
+            setTimeout(() => showScreen('main-app'), 1000);
+        });
+
+        // Initialize
+        document.getElementById('prevBtn').classList.add('opacity-50');
+    </script>
+</body>
+</html>
