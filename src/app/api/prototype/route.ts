@@ -11,8 +11,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'ID required' }, { status: 400 });
   }
   
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '');
+  
   try {
-    const response = await fetch(`${GITHUB_RAW_URL}/${GITHUB_REPO}/master/prototypes/${id}/index.html`);
+    const response = await fetch(`${GITHUB_RAW_URL}/${GITHUB_REPO}/master/prototypes/${safeId}/index.html`);
     if (!response.ok) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
