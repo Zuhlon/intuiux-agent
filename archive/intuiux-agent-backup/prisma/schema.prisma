@@ -1,0 +1,182 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// AI-агенты (персоны, аналитики)
+model Agent {
+  id          String   @id @default(cuid())
+  name        String
+  type        String   // "persona", "analyst", "researcher", "validator"
+  description String
+  systemPrompt String
+  avatar      String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  conversations  Conversation[]
+  insights       Insight[]
+  knowledgeBases KnowledgeBase[]
+  
+  @@map("agents")
+}
+
+// База знаний для обучения агентов
+model KnowledgeBase {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  source      String   // "interview", "analytics", "support", "review", "web"
+  category    String   // "pain_points", "features", "behavior", "feedback"
+  tags        String   // JSON array
+  agentId     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  agent       Agent?   @relation(fields: [agentId], references: [id])
+  
+  @@map("knowledge_base")
+}
+
+// Диалоги с AI-агентами
+model Conversation {
+  id          String   @id @default(cuid())
+  agentId     String
+  title       String?
+  summary     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  agent       Agent    @relation(fields: [agentId], references: [id])
+  messages    Message[]
+  
+  @@map("conversations")
+}
+
+// Сообщения в диалогах
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String   // "user", "assistant", "system"
+  content        String
+  createdAt      DateTime @default(now())
+  
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  
+  @@map("messages")
+}
+
+// Инсайты и рекомендации
+model Insight {
+  id          String   @id @default(cuid())
+  agentId     String?
+  type        String   // "pain_point", "opportunity", "recommendation", "trend"
+  title       String
+  description String
+  priority    String   @default("medium") // "low", "medium", "high", "critical"
+  status      String   @default("new")    // "new", "reviewed", "implemented", "dismissed"
+  metrics     String?  // JSON
+  source      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  agent       Agent?   @relation(fields: [agentId], references: [id])
+  
+  @@map("insights")
+}
+
+// Метрики дашборда
+model Metric {
+  id          String   @id @default(cuid())
+  name        String
+  value       Float
+  unit        String?
+  category    String   // "conversion", "engagement", "satisfaction", "retention"
+  source      String?
+  timestamp   DateTime @default(now())
+  
+  @@map("metrics")
+}
+
+// Сессии пользователей (исследовательские данные)
+model UserSession {
+  id          String   @id @default(cuid())
+  userId      String?  // анонимный идентификатор
+  type        String   // "interview", "usability_test", "survey", "observation"
+  transcript  String?  // расшифровка
+  notes       String?  // заметки исследователя
+  recording   String?  // ссылка на запись
+  duration    Int?     // в минутах
+  tags        String?  // JSON array
+  painPoints  String?  // JSON array
+  goals       String?  // JSON array
+  createdAt   DateTime @default(now())
+  
+  @@map("user_sessions")
+}
+
+// Деплой прототипов
+model PrototypeDeployment {
+  id              String   @id @default(cuid())
+  sessionId       String?  // ID сессии пайплайна
+  productName     String   // Название продукта (для URL)
+  slug            String   @unique // English slug for URL
+  htmlContent     String   // HTML code
+  cssContent      String?  // Separate CSS (optional)
+  jsContent       String?  // Separate JS (optional)
+  accessibilityScore Float? // Accessibility score 0-100
+  accessibilityIssues String? // JSON array of accessibility issues
+  vercelUrl       String?  // Vercel deployment URL
+  vercelId        String?  // Vercel deployment ID
+  status          String   @default("draft") // "draft", "deploying", "deployed", "error"
+  viewCount       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deployedAt      DateTime?
+  
+  @@map("prototype_deployments")
+}
+
+// Сессии пайплайна
+model PipelineSession {
+  id            String   @id @default(cuid())
+  status        String   @default("active") // "active", "completed", "archived"
+  currentStage  Int      @default(1)
+  inputData     String?  // JSON with original input
+  outputData    String?  // JSON with final output
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  completedAt   DateTime?
+  
+  stages        PipelineStage[]
+  
+  @@map("pipeline_sessions")
+}
+
+// Этапы пайплайна
+model PipelineStage {
+  id            String   @id @default(cuid())
+  sessionId     String
+  stageNumber   Int      // 1-9: Idea, Competitors, CJM, IA, Userflow, Prototype, Metrics, Guidelines, Invitation
+  stageName     String
+  status        String   @default("pending") // "pending", "processing", "completed", "error"
+  inputData     String?  // JSON
+  outputData    String?  // JSON
+  errorMessage  String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+  
+  session       PipelineSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  @@unique([sessionId, stageNumber])
+  @@map("pipeline_stages")
+}
