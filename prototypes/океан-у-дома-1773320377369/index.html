@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Океан у дома</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #000; color: #fff; min-height: 100vh; overflow-x: hidden; }
+        
+        /* Screen system */
+        .screen { display: none; min-height: 100vh; position: relative; }
+        .screen.active { display: flex; flex-direction: column; }
+        
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+        @keyframes glow { 0%, 100% { box-shadow: 0 0 20px rgba(250, 204, 21, 0.3); } 50% { box-shadow: 0 0 35px rgba(250, 204, 21, 0.6); } }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes scanline { 0% { top: -10%; } 100% { top: 110%; } }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+        
+        .fade-in { animation: fadeIn 0.4s ease-out; }
+        .animate-float { animation: float 3s ease-in-out infinite; }
+        .animate-glow { animation: glow 2s ease-in-out infinite; }
+        .animate-pulse { animation: pulse 2s ease-in-out infinite; }
+        
+        /* Colors */
+        :root {
+            --bg: #000000;
+            --bg-card: #0A0A0A;
+            --bg-elevated: #141414;
+            --border: #1A1A1A;
+            --text: #FFFFFF;
+            --text-secondary: #A3A3A3;
+            --text-muted: #737373;
+            --accent: #FACC15;
+            --success: #22C55E;
+            --error: #EF4444;
+        }
+        
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .gradient-text { background: linear-gradient(90deg, #FACC15, #FEF08A, #FACC15); background-size: 200% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 3s linear infinite; }
+        
+        /* Grid background */
+        .grid-bg { background-image: linear-gradient(rgba(250, 204, 21, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(250, 204, 21, 0.03) 1px, transparent 1px); background-size: 50px 50px; }
+        
+        /* Scanline effect */
+        .scanline { position: fixed; left: 0; right: 0; height: 4px; background: linear-gradient(to bottom, transparent, rgba(250, 204, 21, 0.15), transparent); animation: scanline 6s linear infinite; pointer-events: none; z-index: 9999; }
+        
+        /* Buttons */
+        .btn-primary { 
+            padding: 14px 32px; border-radius: 12px; border: none; 
+            background: var(--accent); color: #000; font-weight: 700; font-size: 16px; 
+            cursor: pointer; transition: all 0.3s;
+        }
+        .btn-primary:hover { transform: scale(1.02); }
+        
+        .btn-secondary { 
+            padding: 14px 32px; border-radius: 12px; border: 1px solid var(--border); 
+            background: transparent; color: var(--text); font-weight: 600; font-size: 16px; 
+            cursor: pointer; transition: all 0.3s;
+        }
+        .btn-secondary:hover { border-color: var(--accent); }
+        
+        /* Cards */
+        .card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            transition: all 0.3s;
+            position: relative;
+        }
+        .card:hover { border-color: var(--accent); }
+        .card::before { content: ''; position: absolute; inset: -1px; background: linear-gradient(45deg, var(--accent), transparent, var(--accent)); border-radius: inherit; z-index: -1; opacity: 0; transition: opacity 0.3s; }
+        .card:hover::before { opacity: 1; }
+        
+        /* Input */
+        .input {
+            width: 100%; padding: 14px 16px; border-radius: 12px;
+            border: 1px solid var(--border); background: var(--bg-card);
+            color: var(--text); font-size: 16px; font-family: inherit;
+            transition: all 0.2s;
+        }
+        .input:focus { outline: none; border-color: var(--accent); }
+        .input::placeholder { color: var(--text-muted); }
+        
+        /* SPLASH SCREEN */
+        #splash { align-items: center; justify-content: center; text-align: center; padding: 40px; }
+        .logo-large { 
+            width: 100px; height: 100px; border-radius: 24px; 
+            background: linear-gradient(135deg, var(--accent), #FDE047);
+            display: flex; align-items: center; justify-content: center; 
+            font-size: 40px; font-weight: 900; color: #000; 
+            margin: 0 auto 32px;
+        }
+        .splash-title { font-size: 36px; font-weight: 900; margin-bottom: 16px; letter-spacing: -1px; }
+        .splash-desc { color: var(--text-secondary); max-width: 300px; margin: 0 auto 40px; line-height: 1.6; }
+        
+        /* ONBOARDING */
+        #onboarding { padding: 60px 24px 40px; }
+        .progress-bar { width: 100%; height: 4px; background: var(--border); border-radius: 2px; margin-bottom: 48px; }
+        .progress-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; }
+        .step { text-align: center; padding: 40px 0; }
+        .step-icon { font-size: 64px; margin-bottom: 24px; }
+        .step-title { font-size: 24px; font-weight: 800; margin-bottom: 12px; }
+        .step-desc { color: var(--text-secondary); }
+        .onboarding-buttons { display: flex; gap: 12px; margin-top: auto; padding-top: 40px; }
+        
+        /* MAIN / DASHBOARD */
+        #main { background: var(--bg); }
+        
+        .header { 
+            position: fixed; top: 0; left: 0; right: 0; 
+            padding: 16px 20px; 
+            background: rgba(0,0,0,0.95); backdrop-filter: blur(20px); 
+            z-index: 100; border-bottom: 1px solid var(--border); 
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .header-logo { display: flex; align-items: center; gap: 12px; }
+        .header-logo-icon { 
+            width: 36px; height: 36px; border-radius: 10px; 
+            background: var(--accent); 
+            display: flex; align-items: center; justify-content: center; 
+            font-weight: 900; color: #000; font-size: 14px;
+        }
+        .header-title { font-weight: 700; font-size: 18px; }
+        .header-action { 
+            width: 40px; height: 40px; border-radius: 50%; 
+            background: var(--bg-elevated); border: none;
+            display: flex; align-items: center; justify-content: center; 
+            cursor: pointer; font-size: 18px;
+        }
+        
+        .main-content { flex: 1; padding: 80px 20px 100px; overflow-y: auto; }
+        
+        .welcome-section { margin-bottom: 24px; }
+        .welcome-title { font-size: 26px; font-weight: 800; margin-bottom: 4px; }
+        .welcome-subtitle { color: var(--text-secondary); font-size: 14px; }
+        
+        .stats-row { display: flex; gap: 12px; margin-bottom: 24px; overflow-x: auto; padding-bottom: 8px; }
+        .stat-card { 
+            flex: 1; min-width: 100px;
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: 12px; padding: 16px; text-align: center;
+        }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        
+        .quick-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
+        .action-card { 
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: 16px; padding: 20px; text-align: center; 
+            cursor: pointer; transition: all 0.3s;
+        }
+        .action-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+        .action-icon { font-size: 32px; margin-bottom: 8px; }
+        .action-title { font-weight: 600; font-size: 13px; color: var(--text-secondary); }
+        
+        .section-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .section-title span { color: var(--accent); }
+        
+        .bottom-nav { 
+            position: fixed; bottom: 0; left: 0; right: 0; 
+            background: rgba(0,0,0,0.95); backdrop-filter: blur(20px); 
+            border-top: 1px solid var(--border); 
+            display: flex; justify-content: space-around; padding: 12px 0;
+        }
+        .nav-item { 
+            display: flex; flex-direction: column; align-items: center; gap: 4px; 
+            color: var(--text-muted); cursor: pointer; 
+            padding: 8px 16px; border-radius: 12px; 
+            transition: all 0.2s; border: none; background: none;
+            font-family: inherit; font-size: inherit;
+        }
+        .nav-item.active { color: var(--accent); }
+        .nav-item:hover { background: var(--bg-elevated); }
+        .nav-icon { font-size: 20px; }
+        .nav-label { font-size: 11px; font-weight: 500; }
+        
+        /* ACTION SCREEN */
+        #action { background: var(--bg); }
+        .back-header { 
+            position: fixed; top: 0; left: 0; right: 0; 
+            padding: 16px 20px; 
+            background: rgba(0,0,0,0.95); backdrop-filter: blur(20px); 
+            z-index: 100; border-bottom: 1px solid var(--border); 
+            display: flex; align-items: center; gap: 16px;
+        }
+        .back-btn { 
+            width: 40px; height: 40px; border-radius: 50%; 
+            background: var(--bg-elevated); border: none; 
+            color: var(--text); cursor: pointer; 
+            display: flex; align-items: center; justify-content: center; font-size: 18px;
+        }
+        .screen-title { font-weight: 700; font-size: 18px; }
+        .action-content { flex: 1; padding: 80px 20px 20px; }
+        .form-group { margin-bottom: 16px; }
+        .form-label { display: block; margin-bottom: 8px; font-weight: 500; font-size: 14px; color: var(--text-secondary); }
+        
+        /* RESULT SCREEN */
+        #result { align-items: center; justify-content: center; text-align: center; padding: 40px; }
+        .result-icon { 
+            width: 100px; height: 100px; border-radius: 50%; 
+            background: var(--success); 
+            display: flex; align-items: center; justify-content: center; 
+            font-size: 48px; margin: 0 auto 32px;
+        }
+        .result-title { font-size: 28px; font-weight: 800; margin-bottom: 12px; }
+        .result-message { color: var(--text-secondary); margin-bottom: 32px; }
+        .result-buttons { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 280px; }
+        
+        /* PROFILE SCREEN */
+        #profile { background: var(--bg); }
+        .profile-header { text-align: center; padding: 80px 20px 24px; border-bottom: 1px solid var(--border); }
+        .profile-avatar { 
+            width: 80px; height: 80px; border-radius: 50%; 
+            background: linear-gradient(135deg, var(--accent), #FDE047); 
+            margin: 0 auto 16px; 
+            display: flex; align-items: center; justify-content: center; font-size: 32px;
+        }
+        .profile-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+        .profile-email { color: var(--text-muted); font-size: 14px; }
+        .settings-list { padding: 20px; }
+        .settings-item { 
+            display: flex; align-items: center; gap: 16px; 
+            padding: 16px; 
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: 12px; margin-bottom: 12px; 
+            cursor: pointer; transition: all 0.2s;
+        }
+        .settings-item:hover { border-color: var(--accent); }
+        .settings-icon { font-size: 24px; }
+        .settings-text { flex: 1; font-weight: 500; }
+        .settings-arrow { color: var(--text-muted); }
+        
+        /* TOAST */
+        .toast { 
+            position: fixed; bottom: 100px; left: 20px; right: 20px; 
+            background: var(--bg-elevated); border: 1px solid var(--success);
+            border-radius: 12px; padding: 16px; 
+            display: flex; align-items: center; gap: 12px; 
+            transform: translateY(200%); transition: transform 0.3s; z-index: 200;
+        }
+        .toast.show { transform: translateY(0); }
+        .toast-icon { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: var(--success); 
+            display: flex; align-items: center; justify-content: center;
+        }
+        .toast-text { flex: 1; }
+        .toast-title { font-weight: 600; font-size: 14px; }
+        .toast-message { font-size: 12px; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+    <div class="scanline"></div>
+    
+    <!-- SPLASH SCREEN -->
+    <div id="splash" class="screen active grid-bg">
+        <div class="fade-in">
+            <div class="logo-large animate-float">ОК</div>
+            <h1 class="splash-title">Океан у дома</h1>
+            <p class="splash-desc">Инновационный продукт для решения задач пользователей</p>
+            <button class="btn-primary animate-glow" onclick="showScreen('onboarding')">Начать</button>
+        </div>
+    </div>
+
+    <!-- ONBOARDING -->
+    <div id="onboarding" class="screen grid-bg">
+        <div class="progress-bar"><div class="progress-fill" id="progress" style="width: 33%"></div></div>
+        
+        <div id="step1" class="step fade-in">
+            <div class="step-icon">✨</div>
+            <h2 class="step-title">Интеграция с 1С и синхронизация остатков</h2>
+            <p class="step-desc">Ключевая возможность продукта</p>
+        </div>
+        
+        <div id="step2" class="step" style="display: none;">
+            <div class="step-icon">🎯</div>
+            <h2 class="step-title">Детальные карточки товаров с фото, видео</h2>
+            <p class="step-desc">Дополнительные функции</p>
+        </div>
+        
+        <div id="step3" class="step" style="display: none;">
+            <div class="step-icon">🚀</div>
+            <h2 class="step-title">Готовы начать?</h2>
+            <p class="step-desc">Бронирование товаров с ограничением по в</p>
+        </div>
+        
+        <div class="onboarding-buttons">
+            <button class="btn-secondary" id="skipBtn" onclick="showScreen('main')">Пропустить</button>
+            <button class="btn-primary animate-glow" id="nextBtn" onclick="nextStep()">Далее</button>
+        </div>
+    </div>
+
+    <!-- MAIN / DASHBOARD -->
+    <div id="main" class="screen">
+        <header class="header">
+            <div class="header-logo">
+                <div class="header-logo-icon">ОК</div>
+                <span class="header-title">Океан</span>
+            </div>
+            <button class="header-action" onclick="showScreen('profile')">👤</button>
+        </header>
+        
+        <main class="main-content">
+            <section class="welcome-section fade-in">
+                <h2 class="welcome-title">Добро пожаловать!</h2>
+                <p class="welcome-subtitle">Инновационный продукт для решения задач пользователей</p>
+            </section>
+            
+            <div class="stats-row">
+                <div class="stat-card animate-float" style="animation-delay: 0s;">
+                    <div class="stat-value mono">24</div>
+                    <div class="stat-label">Сегодня</div>
+                </div>
+                <div class="stat-card animate-float" style="animation-delay: 0.1s;">
+                    <div class="stat-value mono">+12%</div>
+                    <div class="stat-label">Рост</div>
+                </div>
+                <div class="stat-card animate-float" style="animation-delay: 0.2s;">
+                    <div class="stat-value mono">5</div>
+                    <div class="stat-label">В процессе</div>
+                </div>
+            </div>
+            
+            <section class="quick-actions">
+                <div class="action-card" onclick="showScreen('action')">
+                    <div class="action-icon">⚡</div>
+                    <div class="action-title">Интеграция с 1С и си</div>
+                </div>
+                <div class="action-card">
+                    <div class="action-icon">📊</div>
+                    <div class="action-title">Статистика</div>
+                </div>
+                <div class="action-card">
+                    <div class="action-icon">📅</div>
+                    <div class="action-title">История</div>
+                </div>
+                <div class="action-card" onclick="showScreen('profile')">
+                    <div class="action-icon">⚙️</div>
+                    <div class="action-title">Настройки</div>
+                </div>
+            </section>
+            
+            <section>
+                <h3 class="section-title">Возможности <span>→</span></h3>
+                <div class="card" style="margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <div style="font-size: 28px;">🎯</div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600;">Интеграция с 1С и синхронизаци</div>
+                            <div style="font-size: 13px; color: var(--text-muted);">Основная функция</div>
+                        </div>
+                        <span style="color: var(--text-muted);">→</span>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <div style="font-size: 28px;">🔒</div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600;">Детальные карточки товаров с ф</div>
+                            <div style="font-size: 13px; color: var(--text-muted);">Безопасность</div>
+                        </div>
+                        <span style="color: var(--text-muted);">→</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <div style="font-size: 28px;">📈</div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600;">Бронирование товаров с огранич</div>
+                            <div style="font-size: 13px; color: var(--text-muted);">Аналитика</div>
+                        </div>
+                        <span style="color: var(--text-muted);">→</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+        
+        <nav class="bottom-nav">
+            <button class="nav-item active" onclick="showScreen('main')">
+                <span class="nav-icon">🏠</span>
+                <span class="nav-label">Главная</span>
+            </button>
+            <button class="nav-item" onclick="showScreen('action')">
+                <span class="nav-icon">➕</span>
+                <span class="nav-label">Действие</span>
+            </button>
+            <button class="nav-item" onclick="showScreen('profile')">
+                <span class="nav-icon">👤</span>
+                <span class="nav-label">Профиль</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- ACTION SCREEN -->
+    <div id="action" class="screen">
+        <header class="back-header">
+            <button class="back-btn" onclick="showScreen('main')">←</button>
+            <span class="screen-title">Интеграция с 1С и синхронизаци</span>
+        </header>
+        
+        <main class="action-content">
+            <div class="card fade-in">
+                <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 24px;">Выполнить действие</h3>
+                
+                <div class="form-group">
+                    <label class="form-label">Название</label>
+                    <input type="text" class="input" placeholder="Введите данные">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Категория</label>
+                    <select class="input">
+                        <option>Категория 1</option>
+                        <option>Категория 2</option>
+                        <option>Категория 3</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Описание</label>
+                    <textarea class="input" rows="3" placeholder="Дополнительная информация"></textarea>
+                </div>
+                
+                <button class="btn-primary animate-glow" style="width: 100%; margin-top: 16px;" onclick="showScreen('result')">Выполнить</button>
+            </div>
+        </main>
+    </div>
+
+    <!-- RESULT SCREEN -->
+    <div id="result" class="screen grid-bg">
+        <div class="fade-in">
+            <div class="result-icon animate-pulse">✓</div>
+            <h2 class="result-title">Успешно выполнено!</h2>
+            <p class="result-message">Действие "Интеграция с 1С и си" успешно завершено.</p>
+            <div class="result-buttons">
+                <button class="btn-primary animate-glow" onclick="showScreen('main')">На главную</button>
+                <button class="btn-secondary" onclick="showScreen('action')">Новое действие</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PROFILE SCREEN -->
+    <div id="profile" class="screen">
+        <header class="back-header">
+            <button class="back-btn" onclick="showScreen('main')">←</button>
+            <span class="screen-title">Профиль</span>
+        </header>
+        
+        <div class="profile-header">
+            <div class="profile-avatar">👤</div>
+            <div class="profile-name">Пользователь</div>
+            <div class="profile-email">user@example.com</div>
+        </div>
+        
+        <div class="settings-list">
+            <div class="settings-item" onclick="showToast('Настройки сохранены')">
+                <span class="settings-icon">⚙️</span>
+                <span class="settings-text">Настройки аккаунта</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item" onclick="showToast('Уведомления обновлены')">
+                <span class="settings-icon">🔔</span>
+                <span class="settings-text">Уведомления</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item">
+                <span class="settings-icon">🔒</span>
+                <span class="settings-text">Безопасность</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item">
+                <span class="settings-icon">❓</span>
+                <span class="settings-text">Помощь</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item" onclick="showScreen('splash')" style="border-color: var(--error);">
+                <span class="settings-icon">🚪</span>
+                <span class="settings-text" style="color: var(--error);">Выйти</span>
+                <span class="settings-arrow">→</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST -->
+    <div id="toast" class="toast">
+        <div class="toast-icon">✓</div>
+        <div class="toast-text">
+            <div class="toast-title">Успешно!</div>
+            <div class="toast-message" id="toastMessage">Действие выполнено</div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 1;
+        const totalSteps = 3;
+        
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            const screen = document.getElementById(id);
+            if (screen) {
+                screen.classList.add('active');
+                window.scrollTo(0, 0);
+            }
+        }
+        
+        function nextStep() {
+            if (currentStep < totalSteps) {
+                document.getElementById('step' + currentStep).style.display = 'none';
+                currentStep++;
+                const nextStepEl = document.getElementById('step' + currentStep);
+                nextStepEl.style.display = 'block';
+                nextStepEl.classList.add('fade-in');
+                document.getElementById('progress').style.width = (currentStep / totalSteps * 100) + '%';
+                
+                if (currentStep === totalSteps) {
+                    document.getElementById('nextBtn').textContent = 'Начать работу';
+                    document.getElementById('nextBtn').onclick = () => showScreen('main');
+                    document.getElementById('skipBtn').style.display = 'none';
+                }
+            }
+        }
+        
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastMessage').textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+    </script>
+</body>
+</html>
