@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Стартаперы</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; background: #000; color: #fff; min-height: 100vh; }
+        .screen { display: none; padding: 20px; }
+        .screen.active { display: block; }
+        nav { position: fixed; bottom: 0; left: 0; right: 0; background: #111; padding: 10px; display: flex; gap: 10px; justify-content: center; }
+        nav button { background: #facc15; color: #000; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; }
+        h1 { font-size: 24px; margin-bottom: 16px; }
+        .card { background: #1a1a1a; padding: 16px; border-radius: 12px; margin: 8px 0; }
+    </style>
+</head>
+<body>
+    <div id="main" class="screen active">
+        <h1>Стартаперы</h1>
+        <p style="color: #888; margin-bottom: 20px;">Это даёт нам контент бесплатно и вовлекает комьюнити.</p>
+        <div class="card">Сколько человек читает?</div>
+        <div class="card">заголовок-хук, краткое резюме в начале, потом детали.</div>
+        <div class="card">Окей, резюмирую.</div>
+    </div>
+    <div id="profile" class="screen">
+        <h1>Профиль</h1>
+        <div class="card">Настройки аккаунта</div>
+    </div>
+    <nav>
+        <button onclick="showScreen('main')">Главная</button>
+        <button onclick="showScreen('profile')">Профиль</button>
+    </nav>
+    <script>
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+    </script>
+</body>
+</html>
