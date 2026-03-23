@@ -38,23 +38,40 @@ interface ChatCompletionResponse {
 }
 
 // Загружаем конфигурацию (SDK style)
+// Priority: 1. Environment variables, 2. Config files
 function loadConfig(): ZAIConfig {
-  const homeDir = os.homedir();
-  const configPaths = [
-    path.join(process.cwd(), '.z-ai-config'),
-    path.join(homeDir, '.z-ai-config'),
-    '/etc/.z-ai-config',
-    '/tmp/.z-ai-config',
-    '/etc/.z-ai-config'  // System-wide config location
-  ];
+  // Priority 1: Environment variables (for Vercel, Docker, etc.)
+  const envBaseUrl = process.env.ZAI_BASE_URL || process.env.NEXT_PUBLIC_ZAI_BASE_URL;
+  const envApiKey = process.env.ZAI_API_KEY || process.env.NEXT_PUBLIC_ZAI_API_KEY;
   
-  for (const filePath of configPaths) {
-    try {
-      if (fs.existsSync(filePath)) {
-        const configStr = fs.readFileSync(filePath, 'utf-8');
-        const config = JSON.parse(configStr);
-        if (config.baseUrl && config.apiKey) {
-          console.log(`[ZAI] Config loaded from: ${filePath}`);
+  if (envBaseUrl && envApiKey) {
+    console.log('[ZAI] Config loaded from environment variables');
+    return {
+      baseUrl: envBaseUrl,
+      apiKey: envApiKey,
+    };
+  }
+  
+  // Priority 2: Config files (for local development)
+  // Skip file system on Vercel/edge runtime
+  const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV;
+  
+  if (!isVercel && typeof fs !== 'undefined') {
+    const homeDir = os.homedir();
+    const configPaths = [
+      path.join(process.cwd(), '.z-ai-config'),
+      path.join(homeDir, '.z-ai-config'),
+      '/etc/.z-ai-config',
+      '/tmp/.z-ai-config',
+    ];
+    
+    for (const filePath of configPaths) {
+      try {
+        if (fs.existsSync(filePath)) {
+          const configStr = fs.readFileSync(filePath, 'utf-8');
+          const config = JSON.parse(configStr);
+          if (config.baseUrl && config.apiKey) {
+            console.log(`[ZAI] Config loaded from: ${filePath}`);
             return config;
           }
         }
@@ -62,7 +79,15 @@ function loadConfig(): ZAIConfig {
         console.error(`[ZAI] Error reading config from ${filePath}:`, error);
       }
     }
-  throw new Error('ZAI configuration not found. Please create .z-ai-config file.');
+  }
+  
+  // No config found
+  const errorMsg = envBaseUrl || envApiKey 
+    ? 'ZAI configuration incomplete. Both ZAI_BASE_URL and ZAI_API_KEY must be set.'
+    : 'ZAI configuration not found. Set ZAI_BASE_URL and ZAI_API_KEY environment variables or create .z-ai-config file.';
+  
+  console.error(`[ZAI] ${errorMsg}`);
+  throw new Error(errorMsg);
 }
 
 // LLM Class для удобного использования
@@ -153,4 +178,14 @@ export async function createChatCompletion(options: ChatCompletionOptions): Prom
   }
   
   return response.json()
+}
+
+// Check if LLM is configured
+export function isLLMConfigured(): boolean {
+  try {
+    loadConfig();
+    return true;
+  } catch {
+    return false;
+  }
 }
