@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IntuiUX Agent — AI-Powered UX Pipeline</title>
+    <meta name="description" content="Transform ideas into prototypes in minutes. AI-powered UX pipeline: Ideas → Competitors → CJM → Userflow → Prototype">
+    <meta name="keywords" content="UX,AI,Design,Prototype,Customer Journey,Userflow,Next.js,LLM">
+    <meta property="og:title" content="IntuiUX Agent">
+    <meta property="og:description" content="AI-powered UX Pipeline — From idea to prototype in minutes">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        .gradient-text {
+            background: linear-gradient(135deg, #fbbf24, #f59e0b, #d97706);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .glow { box-shadow: 0 0 60px rgba(251, 191, 36, 0.3); }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        .float { animation: float 3s ease-in-out infinite; }
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(251, 191, 36, 0.4); }
+            50% { box-shadow: 0 0 40px rgba(251, 191, 36, 0.6); }
+        }
+        .pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+        .card-hover { transition: all 0.3s ease; }
+        .card-hover:hover { transform: translateY(-5px); box-shadow: 0 20px 40px rgba(0,0,0,0.3); }
+    </style>
+</head>
+<body class="bg-[#0a0a0f] text-white min-h-screen">
+    <div class="fixed inset-0 pointer-events-none overflow-hidden">
+        <div class="absolute top-0 left-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl"></div>
+        <div class="absolute bottom-0 right-1/4 w-96 h-96 bg-orange-500/10 rounded-full blur-3xl"></div>
+    </div>
+
+    <header class="sticky top-0 z-50 border-b border-white/10 bg-[#0a0a0f]/80 backdrop-blur-xl">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/20">
+                        <svg class="w-6 h-6 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-lg font-bold text-white">IntuiUX Agent</h1>
+                        <p class="text-xs text-gray-500 hidden sm:block">AI-Powered UX Pipeline</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <a href="https://github.com/Zuhlon/intuiux-agent" target="_blank" class="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-sm">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                        GitHub
+                    </a>
+                    <a href="https://github.com/Zuhlon/intuiux-agent/releases/tag/v1.0.0" target="_blank" class="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-black font-medium hover:from-amber-400 hover:to-orange-400 transition-all text-sm">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                        </svg>
+                        v1.0.0
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <section class="relative py-20 px-4">
+        <div class="max-w-5xl mx-auto text-center">
+            <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm mb-8">
+                <span class="w-2 h-2 bg-amber-400 rounded-full animate-pulse"></span>
+                Open Source • MIT License
+            </div>
+            <h1 class="text-4xl sm:text-6xl font-extrabold mb-6">
+                <span class="text-white">От идеи до прототипа</span><br>
+                <span class="gradient-text">за минуты</span>
+            </h1>
+            <p class="text-xl text-gray-400 max-w-2xl mx-auto mb-10">
+                AI-powered UX Pipeline с 9 этапами. Загрузите описание продукта — получите готовый прототип.
+            </p>
+            <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <a href="https://github.com/Zuhlon/intuiux-agent" target="_blank" class="w-full sm:w-auto px-8 py-4 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl text-black font-bold text-lg hover:from-amber-400 hover:to-orange-400 transition-all shadow-lg shadow-amber-500/20 glow">
+                    Начать бесплатно
+                </a>
+                <a href="#features" class="w-full sm:w-auto px-8 py-4 bg-white/5 border border-white/10 rounded-xl font-medium hover:bg-white/10 transition-all">
+                    Узнать больше
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="py-20 px-4">
+        <div class="max-w-6xl mx-auto">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">9-этапный UX Pipeline</h2>
+                <p class="text-gray-400 text-lg">Каждый этап работает через LLM</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-yellow-500 flex items-center justify-center mb-4 text-2xl">💡</div>
+                    <h3 class="text-xl font-bold mb-2">Идея</h3>
+                    <p class="text-gray-400">Извлечение идеи из текста или транскрипции</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center mb-4 text-2xl">🔍</div>
+                    <h3 class="text-xl font-bold mb-2">Конкуренты</h3>
+                    <p class="text-gray-400">3 прямых + 3 косвенных конкурента с анализом</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center mb-4 text-2xl">🗺️</div>
+                    <h3 class="text-xl font-bold mb-2">CJM</h3>
+                    <p class="text-gray-400">Customer Journey Map с цветовой кодировкой</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center mb-4 text-2xl">🏗️</div>
+                    <h3 class="text-xl font-bold mb-2">IA</h3>
+                    <p class="text-gray-400">Информационная архитектура с таксономиями</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center mb-4 text-2xl">👥</div>
+                    <h3 class="text-xl font-bold mb-2">Userflow</h3>
+                    <p class="text-gray-400">Детальные пользовательские сценарии</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-400 to-purple-500 flex items-center justify-center mb-4 text-2xl">📦</div>
+                    <h3 class="text-xl font-bold mb-2">Прототип</h3>
+                    <p class="text-gray-400">Интерактивный HTML → автопубликация</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 flex items-center justify-center mb-4 text-2xl">📧</div>
+                    <h3 class="text-xl font-bold mb-2">Приглашение</h3>
+                    <p class="text-gray-400">Скрипт рекрутинга участников</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-400 to-pink-500 flex items-center justify-center mb-4 text-2xl">📋</div>
+                    <h3 class="text-xl font-bold mb-2">Гайдлайн</h3>
+                    <p class="text-gray-400">Руководство по тестированию</p>
+                </div>
+                <div class="card-hover p-6 rounded-2xl bg-white/5 border border-white/10">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-teal-400 to-emerald-500 flex items-center justify-center mb-4 text-2xl">📊</div>
+                    <h3 class="text-xl font-bold mb-2">Метрики</h3>
+                    <p class="text-gray-400">Продуктовые KPI и рекомендации</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-20 px-4 bg-white/5">
+        <div class="max-w-4xl mx-auto text-center">
+            <h2 class="text-3xl sm:text-4xl font-bold mb-4">Готовы начать?</h2>
+            <p class="text-xl text-gray-400 mb-8">Откройте репозиторий и запустите за 2 минуты</p>
+            <a href="https://github.com/Zuhlon/intuiux-agent" target="_blank" class="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl text-black font-bold text-lg hover:from-amber-400 hover:to-orange-400 transition-all shadow-lg shadow-amber-500/20 pulse-glow">
+                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                Открыть на GitHub
+            </a>
+        </div>
+    </section>
+
+    <footer class="border-t border-white/10 py-8 px-4">
+        <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                <span>IntuiUX Agent — AI-Powered UX Pipeline</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="https://github.com/Zuhlon/intuiux-agent" class="hover:text-amber-400 transition-colors">GitHub</a>
+                <a href="https://github.com/Zuhlon/intuiux-agent/releases" class="hover:text-amber-400 transition-colors">Releases</a>
+                <span>MIT License</span>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
