@@ -62,6 +62,10 @@ interface MessageContentProps {
 
 export function MessageContent({ content, stageId }: MessageContentProps) {
   const hasSearchPerformed = stageId === 'competitors' && content.includes('"searchPerformed": true');
+  
+  // Проверяем, является ли контент HTML (для конкурентного анализа)
+  const isHtmlContent = content.includes('<div style="') && content.includes('font-family:');
+  const isCompetitorAnalysis = stageId === 'competitors';
 
   const parseContent = (text: string) => {
     const parts: Array<{ type: 'text' | 'mermaid'; content: string; key: string }> = [];
@@ -112,17 +116,26 @@ export function MessageContent({ content, stageId }: MessageContentProps) {
           </div>
         </div>
       )}
-      {parts.map((part) => (
-        part.type === 'mermaid' ? (
-          <MermaidDiagram key={part.key} chart={part.content} />
-        ) : (
-          <div key={part.key} className="prose prose-sm prose-slate max-w-none prose-headings:text-slate-900 prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-strong:text-slate-900 prose-table:my-1 prose-th:py-1 prose-td:py-1">
-            <ReactMarkdown>
-              {part.content}
-            </ReactMarkdown>
-          </div>
-        )
-      ))}
+      {/* HTML контент (конкурентный анализ) рендерим напрямую */}
+      {(isHtmlContent || isCompetitorAnalysis) ? (
+        <div 
+          className="competitor-analysis-html"
+          dangerouslySetInnerHTML={{ __html: content }}
+        />
+      ) : (
+        /* Обычный markdown контент */
+        parts.map((part) => (
+          part.type === 'mermaid' ? (
+            <MermaidDiagram key={part.key} chart={part.content} />
+          ) : (
+            <div key={part.key} className="prose prose-sm prose-slate max-w-none prose-headings:text-slate-900 prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-strong:text-slate-900 prose-table:my-1 prose-th:py-1 prose-td:py-1">
+              <ReactMarkdown>
+                {part.content}
+              </ReactMarkdown>
+            </div>
+          )
+        ))
+      )}
     </div>
   )
 }

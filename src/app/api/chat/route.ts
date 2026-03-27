@@ -371,24 +371,24 @@ export async function POST(request: NextRequest) {
     }
     
     // ═══════════════════════════════════════════════════════════════
-    // SPECIAL HANDLING: transcription_analyst uses ALGORITHMIC extraction
-    // LLM is unreliable for structured data extraction from dialogs
+    // SPECIAL HANDLING: transcription_analyst uses ALGORITHMIC extraction v12.0
+    // CRITICAL FIX: NO TEMPLATES - Extract industry FROM TEXT
     // ═══════════════════════════════════════════════════════════════
     if (actualAgentType === 'transcription_analyst') {
-      console.log('[transcription_analyst] Using ALGORITHMIC extraction (not LLM)');
+      console.log('[transcription_analyst v12.0] NO TEMPLATES - extracting from text');
       
       try {
         // Use algorithmic extraction
         const extractedIdea = extractIdeaFromText(message);
         const formattedOutput = formatIdeaAsMarkdown(extractedIdea);
         
-        // Log extraction results
-        console.log(`[transcription_analyst] Extracted:
+        // Log extraction results (v11.0 - no templates)
+        console.log(`[transcription_analyst v11.0] Extracted:
           - Name: "${extractedIdea.name}"
           - Industry: "${extractedIdea.industry}" → "${extractedIdea.subIndustry}"
           - Functions: ${extractedIdea.functions.length}
           - User Stories: ${extractedIdea.userStories.length}
-          - Target Audience: "${extractedIdea.userTypes.substring(0, 50)}..."
+          - Target Audience: "${extractedIdea.userTypes?.substring(0, 50) || 'N/A'}..."
         `);
         
         return NextResponse.json({

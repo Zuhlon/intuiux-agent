@@ -1,815 +1,299 @@
+// Competitors Search API v2.0 - NO TEMPLATES, WEB SEARCH ONLY
+// CRITICAL: Search for REAL competitors using web search, never use predefined databases
+
 import { NextRequest, NextResponse } from 'next/server';
-import { extractIdeaFromText } from '@/lib/idea-extractor';
-import { 
-  analyzeCompetitors, 
-  formatCompetitorAnalysisAsMarkdown 
-} from '@/lib/competitor-analyzer';
+import ZAI from 'z-ai-web-dev-sdk';
+import { LLM } from '@/lib/zai';
 
-// === КОНФИГУРАЦИЯ ===
+// ═══════════════════════════════════════════════════════════════════════════
+// WEB SEARCH FOR REAL COMPETITORS
+// ═══════════════════════════════════════════════════════════════════════════
 
-// База знаний о конкурентах по категориям
-const COMPETITORS_KNOWLEDGE_BASE: Record<string, {
-  russian: Array<{
-    name: string;
-    url: string;
-    description: string;
-    features: string[];
-    pricing: string;
-    strengths: string[];
-    weaknesses: string[];
-  }>;
-  international: Array<{
-    name: string;
-    url: string;
-    description: string;
-    features: string[];
-    pricing: string;
-    strengths: string[];
-    weaknesses: string[];
-  }>;
-  marketTrends: string[];
-  marketSize: string;
-}> = {
-  // Аквариумистика / Зоотовары
-  aquarium: {
-    russian: [
-      {
-        name: 'AquaLogo',
-        url: 'https://aqualogo.ru',
-        description: 'Крупнейший интернет-магазин аквариумистики в России. Широкий ассортимент рыб, растений и оборудования.',
-        features: ['Каталог рыб и растений', 'Оборудование для аквариумов', 'Онлайн-заказ', 'Доставка по РФ', 'Блог и статьи'],
-        pricing: 'Розничные цены, скидки для постоянных клиентов',
-        strengths: ['Широкий ассортимент', 'Доставка по РФ', 'Блог и статьи', 'Филиалы в городах', 'Консультации'],
-        weaknesses: ['Устаревший дизайн сайта', 'Нет бронирования', 'Слабые фильтры поиска', 'Нет мобильного приложения']
-      },
-      {
-        name: 'Akvarimir',
-        url: 'https://akvarimir.ru',
-        description: 'Сеть магазинов аквариумистики с онлайн-продажами. Специализация на живом товаре.',
-        features: ['Живой товар', 'Оборудование', 'Корма', 'Самовывоз и доставка', 'Консультации'],
-        pricing: 'Средние рыночные цены',
-        strengths: ['Живой товар в наличии', 'Офлайн-магазины', 'Консультации специалистов', 'Самовывоз'],
-        weaknesses: ['Ограниченная география', 'Слабый сайт', 'Мало фото/видео контента', 'Ограниченная доставка']
-      },
-      {
-        name: 'Avito (аквариумистика)',
-        url: 'https://avito.ru',
-        description: 'Доска объявлений с разделами аквариумистики. Частные объявления и магазины.',
-        features: ['Частные объявления', 'Живой товар', 'Оборудование', 'Локальный поиск', 'Прямой контакт'],
-        pricing: 'Бесплатно / Платное продвижение',
-        strengths: ['Бесплатно', 'Локальный поиск', 'Много предложений', 'Прямой контакт с продавцом'],
-        weaknesses: ['Нет гарантии', 'Нет доставки живого товара', 'Риск обмана', 'Нет каталога']
-      }
-    ],
-    international: [
-      {
-        name: 'LiveAquaria',
-        url: 'https://liveaquaria.com',
-        description: 'Крупнейший онлайн-магазин аквариумистики в США.',
-        features: ['Тропические рыбы', 'Морские рыбы', 'Кораллы', 'Оборудование', 'Гарантия здоровья'],
-        pricing: 'от $20 за рыбу',
-        strengths: ['Огромный выбор', 'Гарантия здоровья', 'Качественный контент', 'Бренд'],
-        weaknesses: ['Нет доставки в РФ', 'Цена', 'Нет русского языка', 'Санкции']
-      },
-      {
-        name: 'Aquarium Co-Op',
-        url: 'https://aquariumcoop.com',
-        description: 'Популярный магазин аквариумистики с обучающим контентом.',
-        features: ['Растения', 'Рыбы', 'Оборудование', 'Обучающие видео', 'Сообщество'],
-        pricing: 'Средние цены',
-        strengths: ['Контент', 'Сообщество', 'Качество', 'YouTube канал'],
-        weaknesses: ['Нет в РФ', 'Ограниченный ассортимент', 'Нет русского']
-      }
-    ],
-    marketTrends: [
-      'Премиум сегмент с редкими видами рыб',
-      'Онлайн-продажи с доставкой',
-      'Видео-контент и обучение',
-      'Консультации онлайн',
-      'Акваскейпинг и дизайн',
-      'Умные системы фильтрации'
-    ],
-    marketSize: '$5 млрд глобально, $100 млн в РФ'
-  },
-  
-  // Виртуальная АТС / Телефония
-  ats: {
-    russian: [
-      {
-        name: 'Манго Офис',
-        url: 'https://mango-office.ru',
-        description: 'Один из лидеров рынка виртуальных АТС в России. Облачная телефония с интеграцией CRM и аналитикой звонков.',
-        features: ['Виртуальная АТС', 'Интеграция с CRM (Битрикс24, AmoCRM)', 'Запись звонков', 'IVR меню', 'Аналитика звонков', 'Мобильное приложение'],
-        pricing: 'от 650₽/мес за пользователя',
-        strengths: ['Локализация для РФ', 'Интеграция с российскими CRM', 'Техподдержка на русском', 'Работа с российскими операторами', 'Быстрый старт'],
-        weaknesses: ['Ограниченный функционал аналитики', 'Устаревший интерфейс', 'Сложность настройки интеграций', 'Нет API для кастомных интеграций']
-      },
-      {
-        name: 'UIS (Юждес)',
-        url: 'https://uiscom.ru',
-        description: 'Комплексная платформа для контакт-центров и виртуальной телефонии с глубокой аналитикой.',
-        features: ['Виртуальная АТС', 'Контакт-центр', 'Интеграция CRM', 'Аналитика и отчёты', 'Омниканальность', 'Speech Analytics'],
-        pricing: 'от 600₽/мес',
-        strengths: ['Мощный контакт-центр', 'Глубокая аналитика', 'Множество интеграций', 'Speech Analytics', 'Омниканальность'],
-        weaknesses: ['Сложность для новичков', 'Высокая цена расширенных функций', 'Долгое внедрение', 'Требует обучения']
-      },
-      {
-        name: 'Telphin',
-        url: 'https://telphin.ru',
-        description: 'Бюджетное решение для виртуальной АТС с базовым функционалом.',
-        features: ['Виртуальная АТС', 'SIP-телефония', 'Интеграция с 1С', 'Запись разговоров', 'IVR'],
-        pricing: 'от 290₽/мес',
-        strengths: ['Низкая цена', 'Простота настройки', 'Интеграция с 1С', 'Быстрый старт'],
-        weaknesses: ['Базовый функционал', 'Ограниченная аналитика', 'Старый UI', 'Нет мобильного приложения']
-      },
-      {
-        name: 'Rostelcom (Виртуальная АТС)',
-        url: 'https://rt.ru/b2b/vats',
-        description: 'Решение от крупного российского оператора с интеграцией в экосистему Ростелекома.',
-        features: ['Виртуальная АТС', 'Интеграция с сервисами Ростелекома', 'Запись звонков', 'IVR', 'Аналитика'],
-        pricing: 'от 500₽/мес',
-        strengths: ['Надёжность оператора', 'Интеграция с экосистемой', 'Техподдержка', 'Покрытие по всей России'],
-        weaknesses: ['Сложность подключения', 'Ограниченный функционал', 'Долгое время реакции']
-      },
-      {
-        name: 'Yandex.Телефония',
-        url: 'https://telephony.yandex.ru',
-        description: 'Виртуальная АТС от Яндекс с интеграцией в экосистему Yandex Cloud.',
-        features: ['Виртуальная АТС', 'Интеграция с Яндекс.Трекером', 'Запись звонков', 'Yandex SpeechKit', 'Аналитика'],
-        pricing: 'от 400₽/мес',
-        strengths: ['Интеграция с Яндекс', 'SpeechKit для анализа', 'Современный интерфейс', 'Масштабируемость'],
-        weaknesses: ['Ограниченные CRM интеграции', 'Требует Yandex Cloud', 'Нет интеграции с российскими CRM']
-      }
-    ],
-    international: [
-      {
-        name: 'RingCentral',
-        url: 'https://ringcentral.com',
-        description: 'Глобальный лидер облачной телефонии для бизнеса.',
-        features: ['Cloud PBX', 'Video conferencing', 'Team messaging', 'Integrations', 'Analytics', 'Mobile app'],
-        pricing: 'от $20/мес',
-        strengths: ['Global presence', 'Rich feature set', 'API ecosystem', 'Enterprise grade'],
-        weaknesses: ['Высокая цена', 'Нет локализации', 'Нет российских номеров', 'Санкции']
-      },
-      {
-        name: 'Aircall',
-        url: 'https://aircall.io',
-        description: 'Современная облачная телефония для sales-команд.',
-        features: ['Cloud call center', 'CRM integration', 'Analytics', 'Click-to-call', 'Recording', 'IVR'],
-        pricing: 'от $30/мес',
-        strengths: ['Modern UI', 'Great integrations', 'Easy setup', 'Good analytics'],
-        weaknesses: ['Expensive', 'No Russian', 'Limited Russian numbers']
-      }
-    ],
-    marketTrends: [
-      'Переход на облачные решения',
-      'Интеграция с CRM и сервисами продаж',
-      'AI-ассистенты для обработки звонков',
-      'Омниканальность (звонки + чаты + email)',
-      'Speech Analytics и анализ настроений',
-      'Видеоконференцсвязь в составе АТС'
-    ],
-    marketSize: '$15 млрд глобально, $500 млн в РФ (2024)'
-  },
-  
-  // BI / Дашборды / Аналитика
-  dashboard: {
-    russian: [
-      {
-        name: 'Yandex DataLens',
-        url: 'https://cloud.yandex.ru/services/datalens',
-        description: 'Бесплатный BI-сервис для визуализации данных от Яндекс.',
-        features: ['Дашборды', 'Визуализации', 'Интеграция с Yandex Cloud', 'Collaborative редактирование', 'Embedding'],
-        pricing: 'Бесплатно',
-        strengths: ['Бесплатность', 'Интеграция с Yandex', 'Простота', 'Русский язык', 'Нет лимитов'],
-        weaknesses: ['Ограниченная кастомизация', 'Зависимость от Yandex', 'Ограниченные источники данных', 'Нет embedded analytics']
-      },
-      {
-        name: 'MyOffice BI',
-        url: 'https://myoffice.ru',
-        description: 'Российская BI-платформа для бизнес-аналитики.',
-        features: ['Отчёты', 'Дашборды', 'Интеграция с MyOffice', 'Дрилдаун', 'Экспорт'],
-        pricing: 'По запросу',
-        strengths: ['Российская разработка', 'Импортозамещение', 'Интеграция с MyOffice'],
-        weaknesses: ['Ограниченный функционал', 'Сложность внедрения', 'Мало интеграций']
-      }
-    ],
-    international: [
-      {
-        name: 'Grafana',
-        url: 'https://grafana.com',
-        description: 'Open-source платформа для визуализации и мониторинга.',
-        features: ['Гибкие дашборды', 'Алертинг', 'Плагины', 'Open source', 'Multi-source'],
-        pricing: 'Open source / Enterprise от $50/мес',
-        strengths: ['Гибкость', 'Open source', 'Community', 'Plugin ecosystem', 'Активное развитие'],
-        weaknesses: ['Сложность настройки', 'Требует технических знаний', 'Нет русского языка', 'Нужен сервер']
-      },
-      {
-        name: 'Tableau',
-        url: 'https://tableau.com',
-        description: 'Лидер рынка BI с мощной визуализацией.',
-        features: ['Visual analytics', 'Data prep', 'Dashboard', 'AI insights', 'Collaboration'],
-        pricing: 'от $15/мес за пользователя',
-        strengths: ['Мощный функционал', 'Лидер рынка', 'AI-возможности', 'Rich visualizations'],
-        weaknesses: ['Высокая цена', 'Сложность обучения', 'Нет локализации', 'Санкции']
-      },
-      {
-        name: 'Power BI',
-        url: 'https://powerbi.microsoft.com',
-        description: 'BI-решение от Microsoft с интеграцией в Office 365.',
-        features: ['Reports', 'Dashboards', 'Excel integration', 'AI', 'Sharing'],
-        pricing: 'от $10/мес',
-        strengths: ['Интеграция с Excel', 'Office 365', 'Знакомый интерфейс', 'AI'],
-        weaknesses: ['Сложность', 'Цена для enterprise', 'Microsoft lock-in', 'Санкции']
-      },
-      {
-        name: 'Metabase',
-        url: 'https://metabase.com',
-        description: 'Простая open-source BI-платформа.',
-        features: ['Visual queries', 'Dashboards', 'Alerts', 'Embedding', 'Open source'],
-        pricing: 'Open source / Pro от $85/мес',
-        strengths: ['Простота', 'Open source', 'Быстрый старт', 'No-code'],
-        weaknesses: ['Ограниченная кастомизация', 'Требует сервер', 'Мало источников']
-      }
-    ],
-    marketTrends: [
-      'Self-service аналитика',
-      'Real-time данные и streaming',
-      'AI-инсайты и автоматические рекомендации',
-      'Мобильные дашборды',
-      'Embedded analytics',
-      'Natural language queries'
-    ],
-    marketSize: '$25 млрд глобально (BI-рынок)'
-  },
-  
-  // CRM
-  crm: {
-    russian: [
-      {
-        name: 'Битрикс24',
-        url: 'https://bitrix24.ru',
-        description: 'Комплексная платформа: CRM, задачи, коммуникации, сайт.',
-        features: ['CRM', 'Задачи', 'Коммуникации', 'Сайт', 'Интернет-магазин', 'Автоматизация'],
-        pricing: 'Бесплатно до 5 пользователей / от 2490₽/мес',
-        strengths: ['Бесплатный тариф', 'Всё в одном', 'Локализация', 'Интеграции', 'Большое сообщество'],
-        weaknesses: ['Перегруженность', 'Сложность', 'Скорость работы', 'Обучение нужно']
-      },
-      {
-        name: 'AmoCRM',
-        url: 'https://amocrm.ru',
-        description: 'Простая CRM для управления продажами.',
-        features: ['Воронка продаж', 'Интеграции', 'Автоматизация', 'Аналитика', 'Мессенджеры'],
-        pricing: 'от 799₽/мес',
-        strengths: ['Простота', 'Интуитивность', 'Воронка продаж', 'Интеграции', 'Быстрый старт'],
-        weaknesses: ['Ограниченный функционал', 'Нет задач/проектов', 'Цена растёт с пользователями']
-      },
-      {
-        name: 'Megaplan',
-        url: 'https://megaplan.ru',
-        description: 'CRM и управление проектами для бизнеса.',
-        features: ['CRM', 'Задачи', 'Проекты', 'Финансы', 'Документы'],
-        pricing: 'от 450₽/мес',
-        strengths: ['Цена', 'Комплексность', 'Российская разработка'],
-        weaknesses: ['UI/UX', 'Мало интеграций', 'Скорость развития']
-      }
-    ],
-    international: [
-      {
-        name: 'Salesforce',
-        url: 'https://salesforce.com',
-        description: 'Мировой лидер CRM для крупного бизнеса.',
-        features: ['Sales Cloud', 'Service Cloud', 'Marketing Cloud', 'AI Einstein', 'AppExchange'],
-        pricing: 'от $25/мес за пользователя',
-        strengths: ['Мощный функционал', 'Экосистема', 'AI', 'Customization', 'Market leader'],
-        weaknesses: ['Высокая цена', 'Сложность', 'Нет русского', 'Санкции']
-      },
-      {
-        name: 'HubSpot CRM',
-        url: 'https://hubspot.com',
-        description: 'Бесплатная CRM с платными модулями.',
-        features: ['Free CRM', 'Marketing Hub', 'Sales Hub', 'Service Hub', 'CMS'],
-        pricing: 'Бесплатно / Hub от $50/мес',
-        strengths: ['Free tier', 'Easy to use', 'All-in-one', 'Great UX'],
-        weaknesses: ['Expensive hubs', 'Limited free features', 'No Russian']
-      },
-      {
-        name: 'Pipedrive',
-        url: 'https://pipedrive.com',
-        description: 'CRM для sales-команд с фокусом на сделки.',
-        features: ['Pipeline', 'Activities', 'Reports', 'Automation', 'Integrations'],
-        pricing: 'от $15/мес',
-        strengths: ['Sales-focused', 'Easy to use', 'Mobile app', 'Integrations'],
-        weaknesses: ['No Russian', 'Limited features', 'Add-ons expensive']
-      }
-    ],
-    marketTrends: [
-      'AI-прогнозирование продаж',
-      'Автоматизация процессов',
-      'Интеграция с мессенджерами',
-      'Revenue Operations (RevOps)',
-      'Customer Data Platforms',
-      'No-code кастомизация'
-    ],
-    marketSize: '$80 млрд глобально'
-  },
-  
-  // E-commerce / Интернет-магазины
-  ecommerce: {
-    russian: [
-      {
-        name: 'Битрикс24 (Интернет-магазин)',
-        url: 'https://bitrix24.ru',
-        description: 'Комплексная платформа с модулем интернет-магазина.',
-        features: ['Каталог товаров', 'Корзина', 'Оплата', 'Доставка', 'CRM', 'Маркетинг'],
-        pricing: 'от 2490₽/мес',
-        strengths: ['Всё в одном', 'CRM интеграция', 'Локализация', 'Маркетинговые инструменты'],
-        weaknesses: ['Сложность', 'Перегруженность', 'Долгое внедрение']
-      },
-      {
-        name: 'InSales',
-        url: 'https://insales.ru',
-        description: 'Платформа для создания интернет-магазинов.',
-        features: ['Конструктор магазина', 'Каталог', 'Оплата', 'Доставка', 'Интеграции'],
-        pricing: 'от 990₽/мес',
-        strengths: ['Простота', 'Быстрый старт', 'Интеграции', 'Поддержка'],
-        weaknesses: ['Ограниченная кастомизация', 'Цена дополнений', 'Тemplates']
-      },
-      {
-        name: 'Ecwid',
-        url: 'https://ecwid.ru',
-        description: 'Виджет интернет-магазина для любых сайтов.',
-        features: ['Виджет магазина', 'Каталог', 'Корзина', 'Оплата', 'Интеграции'],
-        pricing: 'от 990₽/мес',
-        strengths: ['Легко добавить на сайт', 'Виджет', 'Интеграции', 'Мобильность'],
-        weaknesses: ['Ограниченный дизайн', 'Цена', 'Меньше функций']
-      },
-      {
-        name: 'CS-Cart',
-        url: 'https://cs-cart.ru',
-        description: 'Профессиональная платформа для интернет-магазинов.',
-        features: ['Каталог', 'Мультивендор', 'Доставка', 'Оплата', 'API'],
-        pricing: 'от 19900₽ (лицензия)',
-        strengths: ['Мощный функционал', 'Мультивендор', 'Гибкость', 'Self-hosted'],
-        weaknesses: ['Высокая цена', 'Требует хостинг', 'Сложность']
-      }
-    ],
-    international: [
-      {
-        name: 'Shopify',
-        url: 'https://shopify.com',
-        description: 'Мировой лидер платформ для интернет-магазинов.',
-        features: ['Store builder', 'Payments', 'Shipping', 'Marketing', 'App store'],
-        pricing: 'от $29/мес',
-        strengths: ['Market leader', 'Easy to use', 'App ecosystem', 'Reliable'],
-        weaknesses: ['Нет русского', 'Цена', 'Санкции', 'Limited customization']
-      },
-      {
-        name: 'WooCommerce',
-        url: 'https://woocommerce.com',
-        description: 'WordPress плагин для интернет-магазина.',
-        features: ['Products', 'Cart', 'Payments', 'Shipping', 'Plugins'],
-        pricing: 'Бесплатно / Extensions платно',
-        strengths: ['Free', 'Open source', 'WordPress ecosystem', 'Flexible'],
-        weaknesses: ['Requires WordPress', 'Maintenance', 'Security updates']
-      },
-      {
-        name: 'BigCommerce',
-        url: 'https://bigcommerce.com',
-        description: 'Enterprise платформа для e-commerce.',
-        features: ['Store', 'B2B', 'Multi-channel', 'API', 'Enterprise'],
-        pricing: 'от $29/мес',
-        strengths: ['Enterprise features', 'Multi-channel', 'API', 'Scalable'],
-        weaknesses: ['No Russian', 'Price', 'Complexity', 'Sanctions']
-      }
-    ],
-    marketTrends: [
-      'Интеграция с маркетплейсами (Ozon, Wildberries)',
-      'Мультиканальные продажи',
-      'AI-рекомендации товаров',
-      'Social commerce',
-      'Быстрая доставка',
-      'Программы лояльности'
-    ],
-    marketSize: '$6 трлн глобально, $100 млрд в РФ'
-  },
-  
-  // Мессенджеры / Коммуникации
-  messenger: {
-    russian: [
-      {
-        name: 'Telegram',
-        url: 'https://telegram.org',
-        description: 'Популярный мессенджер с каналами, группами и ботами.',
-        features: ['Чаты', 'Каналы', 'Группы', 'Боты', 'Голосовые звонки', 'Видеозвонки'],
-        pricing: 'Бесплатно',
-        strengths: ['Популярность в РФ', 'Боты', 'API', 'Безопасность', 'Скорость'],
-        weaknesses: ['Нет бизнес-функций', 'Ограниченная модерация', 'Нет CRM интеграций']
-      },
-      {
-        name: 'VK Мессенджер',
-        url: 'https://vk.com',
-        description: 'Мессенджер социальной сети ВКонтакте.',
-        features: ['Чаты', 'Группы', 'Видеозвонки', 'Сообщества', 'VK Pay'],
-        pricing: 'Бесплатно',
-        strengths: ['Популярность в РФ', 'Интеграция с VK', 'Бизнес-функции'],
-        weaknesses: ['Привязка к соцсети', 'Ограниченный API', 'Меньше функций']
-      }
-    ],
-    international: [
-      {
-        name: 'Slack',
-        url: 'https://slack.com',
-        description: 'Корпоративный мессенджер для команд.',
-        features: ['Channels', 'DM', 'Apps', 'Workflows', 'Huddles', 'Canvas'],
-        pricing: 'Бесплатно / Pro от $8.75/мес',
-        strengths: ['Integrations', 'Enterprise', 'UX', 'Ecosystem'],
-        weaknesses: ['Цена', 'Сложность', 'Нет русского', 'Санкции']
-      },
-      {
-        name: 'Microsoft Teams',
-        url: 'https://teams.microsoft.com',
-        description: 'Корпоративная платформа от Microsoft.',
-        features: ['Chat', 'Video', 'Files', 'Apps', 'SharePoint', 'Office 365'],
-        pricing: 'Бесплатно / от $6/мес',
-        strengths: ['Office 365 integration', 'Enterprise', 'Video', 'Security'],
-        weaknesses: ['Сложность', 'Performance', 'Нет русского UI', 'Санкции']
-      },
-      {
-        name: 'Discord',
-        url: 'https://discord.com',
-        description: 'Мессенджер для сообществ с голосовыми каналами.',
-        features: ['Servers', 'Channels', 'Voice', 'Video', 'Bots', 'Streaming'],
-        pricing: 'Бесплатно / Nitro от $10/мес',
-        strengths: ['Voice quality', 'Bots', 'Streaming', 'Gaming focus'],
-        weaknesses: ['Not business-focused', 'Moderation', 'No enterprise']
-      }
-    ],
-    marketTrends: [
-      'AI-ассистенты в чатах',
-      'Интеграция с бизнес-инструментами',
-      'Видеоконференции',
-      'Threads и организация обсуждений',
-      'Безопасность и шифрование',
-      'Low-code/No-code боты'
-    ],
-    marketSize: '$100 млрд+ глобально'
-  },
-  
-  // SportTech / Фитнес-клубы
-  fitness: {
-    russian: [
-      {
-        name: 'Mindbox',
-        url: 'https://mindbox.ru',
-        description: 'CRM и автоматизация для фитнес-клубов. Полная система управления.',
-        features: ['CRM для клубов', 'Абонементы', 'Расписание', 'Мобильное приложение', 'Интеграция с 1С', 'Контроль доступа'],
-        pricing: 'от 15 000₽/мес',
-        strengths: ['Полная автоматизация клуба', 'Интеграция с 1С', 'Гибкая система абонементов', 'Мобильное приложение для клиентов', 'Контроль доступа (турникеты)'],
-        weaknesses: ['Высокая стоимость внедрения', 'Сложность настройки', 'Долгое обучение персонала', 'Избыточный функционал для малых клубов']
-      },
-      {
-        name: 'Fitbase',
-        url: 'https://fitbase.ru',
-        description: 'Специализированная CRM для фитнес-клубов с контролем доступа.',
-        features: ['CRM для клубов', 'Абонементы', 'Контроль доступа', 'Фитнес-тесты', 'Моб. приложение', 'Аналитика'],
-        pricing: 'от 5 000₽/мес',
-        strengths: ['Специализация на фитнесе', 'Контроль доступа (турникеты)', 'Фитнес-тестирование', 'Глубокая аналитика'],
-        weaknesses: ['Меньше интеграций', 'Сложность для малого бизнеса', 'Ограниченная география поддержки']
-      },
-      {
-        name: 'Dikidi',
-        url: 'https://dikidi.net',
-        description: 'Онлайн-запись для фитнес-студий и йоги. Быстрый старт.',
-        features: ['Онлайн-запись', 'Расписание', 'SMS-уведомления', 'CRM', 'Виджеты', 'Telegram-уведомления'],
-        pricing: 'от 490₽/мес',
-        strengths: ['Простота использования', 'Быстрый старт за 15 минут', 'Доступная цена', 'Хороший дизайн'],
-        weaknesses: ['Ограниченный функционал для клубов', 'Нет учёта абонементов', 'Нет интеграции с турникетами', 'Слабая аналитика']
-      },
-      {
-        name: 'YCLIENTS',
-        url: 'https://yclients.com',
-        description: 'Лидер онлайн-записи с функциями для фитнес-клубов.',
-        features: ['Онлайн-запись', 'CRM', 'Складской учёт', 'Маркетинг', 'Telegram-боты', 'Мессенджер-маркетинг'],
-        pricing: 'от 990₽/мес',
-        strengths: ['Лидер рынка', 'Богатый функционал', 'Интеграции', 'Маркетинговые инструменты'],
-        weaknesses: ['Сложность интерфейса', 'Высокая цена полного функционала', 'Долгое обучение']
-      },
-      {
-        name: 'SportLogic',
-        url: 'https://sportlogic.ru',
-        description: 'Автоматизация спортивных клубов и федераций.',
-        features: ['Управление клубом', 'Членские карты', 'Расписание', 'Отчётность', 'Интеграция с 1С'],
-        pricing: 'Индивидуально',
-        strengths: ['Работа с федерациями', 'Спортивная специализация', 'Глубокая отчётность', 'Интеграция с гос. системами'],
-        weaknesses: ['Узкая специализация', 'Высокий порог входа', 'Сложный интерфейс', 'Долгое внедрение']
-      }
-    ],
-    international: [
-      {
-        name: 'Mindbody',
-        url: 'https://mindbodyonline.com',
-        description: 'Мировой лидер ПО для фитнес-студий и салонов.',
-        features: ['Booking', 'POS', 'Marketing', 'App', 'Analytics', 'Payments'],
-        pricing: 'от $129/мес',
-        strengths: ['Global leader', 'Rich features', 'Mobile app', 'Integrations'],
-        weaknesses: ['High price', 'No Russian', 'Complex', 'Sanctions']
-      },
-      {
-        name: 'Zen Planner',
-        url: 'https://zenplanner.com',
-        description: 'ПО для кроссфит-боксов и фитнес-студий.',
-        features: ['Membership', 'Scheduling', 'Billing', 'App', 'Reporting'],
-        pricing: 'от $99/мес',
-        strengths: ['CrossFit focus', 'Member app', 'Billing', 'Analytics'],
-        weaknesses: ['No Russian', 'Price', 'Limited customization']
-      }
-    ],
-    marketTrends: [
-      'Геймификация тренировок',
-      'AI-тренеры и персонализация',
-      'Интеграция с носимыми устройствами',
-      'Онлайн-тренировки (hybrid fitness)',
-      'Мессенджер-маркетинг',
-      'Программы лояльности',
-      'Видео-тренировки в приложении'
-    ],
-    marketSize: '$100 млрд глобально, $3 млрд в РФ (2024)'
-  },
-  
-  // Онлайн-запись / Календарь записи
-  booking: {
-    russian: [
-      {
-        name: 'YCLIENTS',
-        url: 'https://yclients.com',
-        description: 'Лидер рынка онлайн-записи в России. Полная автоматизация для салонов красоты, клиник, фитнеса.',
-        features: ['Онлайн-запись', 'CRM', 'Складской учёт', 'Маркетинг', 'Мессенджер-маркетинг', 'Telegram-боты'],
-        pricing: 'от 990₽/мес',
-        strengths: ['Лидер рынка', 'Богатый функционал', 'Интеграции', 'Маркетинговые инструменты', 'Мессенджер-интеграции'],
-        weaknesses: ['Сложность интерфейса', 'Высокая цена полного функционала', 'Долгое обучение', 'Перегруженность']
-      },
-      {
-        name: 'Dikidi',
-        url: 'https://dikidi.net',
-        description: 'Популярный сервис онлайн-записи для салонов красоты и услуг.',
-        features: ['Онлайн-запись', 'CRM', 'Склад', 'Отчёты', 'SMS-уведомления', 'Сайт'],
-        pricing: 'от 490₽/мес',
-        strengths: ['Доступная цена', 'Простота', 'Быстрый старт', 'Хорошая поддержка'],
-        weaknesses: ['Ограниченный функционал', 'Меньше интеграций', 'Базовая аналитика']
-      },
-      {
-        name: 'Sonline',
-        url: 'https://sonline.su',
-        description: 'Сервис онлайн-записи для медицинских клиник и салонов.',
-        features: ['Онлайн-запись', 'Электронная медкарта', 'CRM', 'Телефония', 'График работы'],
-        pricing: 'от 490₽/мес',
-        strengths: ['Специализация на медицине', 'Электронные карты', 'Интеграция с телефонией'],
-        weaknesses: ['Меньше маркетинговых функций', 'Ограниченные интеграции', 'Узкая специализация']
-      },
-      {
-        name: 'BeautySale',
-        url: 'https://beautysale.ru',
-        description: 'CRM и онлайн-запись для салонов красоты.',
-        features: ['Онлайн-запись', 'CRM', 'Склад', 'Маркетинг', 'Программа лояльности'],
-        pricing: 'от 690₽/мес',
-        strengths: ['Фокус на бьюти-сегменте', 'Программы лояльности', 'Маркетинговые акции'],
-        weaknesses: ['Узкая специализация', 'Меньше функций для медицины', 'Ограниченная кастомизация']
-      },
-      {
-        name: 'Medesk',
-        url: 'https://medesk.ru',
-        description: 'Профессиональная система управления медицинской клиникой.',
-        features: ['Онлайн-запись', 'Электронные карты', 'Биллинг', 'Интеграция с лабораториями', 'Телемедицина'],
-        pricing: 'от 2500₽/мес',
-        strengths: ['Профессиональное решение для медицины', 'Интеграция с лабораториями', 'Телемедицина', 'Соответствие ФЗ-323'],
-        weaknesses: ['Высокая цена', 'Сложность внедрения', 'Избыточный функционал для малого бизнеса']
-      }
-    ],
-    international: [
-      {
-        name: 'Calendly',
-        url: 'https://calendly.com',
-        description: 'Мировой лидер онлайн-планирования встреч.',
-        features: ['Scheduling', 'Calendar sync', 'Team scheduling', 'Automations', 'Integrations'],
-        pricing: 'Бесплатно / Premium от $8/мес',
-        strengths: ['Простота', 'Интуитивность', 'Множество интеграций', 'Global leader'],
-        weaknesses: ['Нет русского языка', 'Нет CRM функций', 'Санкции', 'Нет телефонии']
-      },
-      {
-        name: 'Acuity Scheduling',
-        url: 'https://acuityscheduling.com',
-        description: 'Мощный сервис онлайн-записи для бизнеса.',
-        features: ['Online booking', 'Payments', 'Client management', 'Email/SMS', 'Intake forms'],
-        pricing: 'от $16/мес',
-        strengths: ['Богатый функционал', 'Payments', 'Customization', 'API'],
-        weaknesses: ['Нет русского', 'Цена', 'Санкции', 'Сложность']
-      },
-      {
-        name: 'Fresha',
-        url: 'https://fresha.com',
-        description: 'Бесплатная платформа для салонов красоты.',
-        features: ['Booking', 'POS', 'Inventory', 'Marketing', 'Free forever'],
-        pricing: 'Бесплатно (комиссия с платежей)',
-        strengths: ['Бесплатность', 'All-in-one', 'POS система', 'Маркетинг'],
-        weaknesses: ['Комиссия на платежи', 'Нет русского', 'Ограниченная кастомизация']
-      }
-    ],
-    marketTrends: [
-      'Интеграция с мессенджерами (WhatsApp, Telegram)',
-      'AI-ассистенты для напоминаний',
-      'Автоматический телефонный обзвон',
-      'Мессенджер-маркетинг',
-      'Программы лояльности',
-      'Видеоконсультации и телемедицина',
-      'Интеграция с платёжными системами'
-    ],
-    marketSize: '$10 млрд глобально, $300 млн в РФ (2024)'
-  }
-};
-
-// Определение категории продукта по КОНТЕКСТУ
-function detectCategory(ideaText: string): string {
-  const lowerText = ideaText.toLowerCase();
-  
-  // SportTech / Фитнес (ПРОВЕРЯЕМ ПЕРВЫМ!)
-  if (lowerText.includes('фитнес') || lowerText.includes('тренер') || 
-      lowerText.includes('зал') || lowerText.includes('тренировк') ||
-      lowerText.includes('абонемент') || lowerText.includes('спортивн') ||
-      lowerText.includes('йог') || lowerText.includes('pilates') ||
-      lowerText.includes('crossfit') || lowerText.includes('бассейн') ||
-      lowerText.includes('fitness') || lowerText.includes('gym') ||
-      lowerText.includes('спортклуб') || lowerText.includes('клуб') && lowerText.includes('скорпион')) {
-    return 'fitness';
-  }
-  
-  // Аквариумистика (проверяем ВТОРЫМ! - это специфическая ниша)
-  if (lowerText.includes('аквариум') || lowerText.includes('аквариумист') || 
-      lowerText.includes('рыб') && (lowerText.includes('магазин') || lowerText.includes('продаж')) ||
-      lowerText.includes('океан') && lowerText.includes('дом') ||
-      lowerText.includes('водоросл') || lowerText.includes('креветк') ||
-      lowerText.includes('акваскейп')) {
-    return 'aquarium';
-  }
-  
-  // Онлайн-запись / Календарь записи (проверяем ВТОРЫМ!)
-  if ((lowerText.includes('запис') && (lowerText.includes('календар') || lowerText.includes('расписан') || lowerText.includes('слот') || lowerText.includes('приём'))) ||
-      lowerText.includes('онлайн запис') || lowerText.includes('запись к') || lowerText.includes('запись на приём') ||
-      lowerText.includes('бронирование времени') || lowerText.includes('yclients') || lowerText.includes('dikidi') ||
-      ((lowerText.includes('логопед') || lowerText.includes('врач') || lowerText.includes('клиник') || 
-        lowerText.includes('салон') || lowerText.includes('мастер') || lowerText.includes('психолог') ||
-        lowerText.includes('репетитор') || lowerText.includes('учитель')) && lowerText.includes('запис'))) {
-    return 'booking';
-  }
-  
-  // E-commerce / Интернет-магазин (общий случай)
-  if (lowerText.includes('интернет-магазин') || lowerText.includes('магазин ') || 
-      lowerText.includes('e-commerce') || lowerText.includes('ecommerce') ||
-      (lowerText.includes('товар') && (lowerText.includes('корзин') || lowerText.includes('доставк') || lowerText.includes('оплата'))) ||
-      lowerText.includes('маркетплейс') || lowerText.includes('торговая площадка')) {
-    return 'ecommerce';
-  }
-  
-  // АТС / Телефония
-  if (lowerText.includes('атс') || lowerText.includes('телефон') || lowerText.includes('звонк') || 
-      lowerText.includes('call') || lowerText.includes('ivr') || lowerText.includes('sip') ||
-      lowerText.includes('голосовой') || lowerText.includes('колл-центр')) {
-    return 'ats';
-  }
-  
-  // Дашборд / Аналитика (только если явно про аналитику данных)
-  if ((lowerText.includes('дашборд') || lowerText.includes('аналтик') || lowerText.includes('метрик') ||
-      lowerText.includes('отчёт') || lowerText.includes('bi') || lowerText.includes('kpi')) &&
-      (lowerText.includes('данн') || lowerText.includes('график') || lowerText.includes('виджет'))) {
-    return 'dashboard';
-  }
-  
-  // CRM
-  if (lowerText.includes('crm') || lowerText.includes('клиент') || lowerText.includes('продаж') ||
-      lowerText.includes('сделк') || lowerText.includes('лид') || lowerText.includes('lead')) {
-    return 'crm';
-  }
-  
-  // Мессенджер
-  if (lowerText.includes('мессендж') || lowerText.includes('чат') || lowerText.includes('сообщен') ||
-      lowerText.includes('диалог') || lowerText.includes('общение')) {
-    return 'messenger';
-  }
-  
-  return 'dashboard'; // Default
+interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
 }
 
-// Извлечение названия продукта
-function extractProductName(ideaText: string): string {
-  const nameMatch = ideaText.match(/(?:Название идеи|Название)[^:]*:?\s*\*\*?([^*\n]+)\*\*?/i);
-  if (nameMatch) {
-    return nameMatch[1].trim().replace(/\*\*/g, '');
-  }
-  
-  const boldMatch = ideaText.match(/\*\*([^*]{3,50})\*\*/);
-  if (boldMatch) {
-    return boldMatch[1].trim();
-  }
-  
-  return 'Продукт';
-}
-
-// Генерация УНИКАЛЬНОГО SWOT для каждого конкурента
-// Opportunities и Threats должны отличаться для разных конкурентов!
-function generateSWOT(comp: {
+interface CompetitorInfo {
   name: string;
+  url: string;
+  description: string;
+  features: string[];
+  pricing: string;
   strengths: string[];
   weaknesses: string[];
-  features?: string[];
-  pricing?: string;
-}, ourProductName: string): {
+}
+
+let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+
+async function getZAI() {
+  if (!zaiInstance) {
+    zaiInstance = await ZAI.create();
+  }
+  return zaiInstance;
+}
+
+// Search the web for competitors
+async function searchWeb(query: string, numResults: number = 10): Promise<SearchResult[]> {
+  try {
+    const zai = await getZAI();
+    const results = await zai.functions.invoke('web_search', {
+      query: query,
+      num: numResults
+    });
+    
+    if (Array.isArray(results)) {
+      return results.map((r: any) => ({
+        title: r.name || r.title || '',
+        url: r.url || r.link || '',
+        snippet: r.snippet || r.description || '',
+      }));
+    }
+    return [];
+  } catch (error) {
+    console.error('[WebSearch] Error:', error);
+    return [];
+  }
+}
+
+// Extract competitor info from search results using LLM
+async function extractCompetitorsFromSearch(
+  productName: string,
+  productDescription: string,
+  searchResults: SearchResult[]
+): Promise<CompetitorInfo[]> {
+  const llm = new LLM();
+  
+  const resultsText = searchResults
+    .slice(0, 15)
+    .map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet}`)
+    .join('\n\n');
+  
+  const systemPrompt = `Ты — аналитик по конкурентному анализу. Извлеки информацию о РЕАЛЬНЫХ конкурентах из результатов поиска.
+
+КРИТИЧЕСКИ ВАЖНО:
+1. Извлекай ТОЛЬКО РЕАЛЬНЫХ конкурентов из результатов поиска
+2. НЕ придумывай конкурентов
+3. Каждый конкурент должен иметь РЕАЛЬНЫЙ URL из результатов поиска
+4. Если информации недостаточно — напиши "не указано"
+
+Ответь в формате JSON массива конкурентов.`;
+
+  const userPrompt = `Продукт: ${productName}
+Описание: ${productDescription}
+
+Результаты веб-поиска конкурентов:
+${resultsText}
+
+Извлеки 3-5 реальных конкурентов из этих результатов в формате:
+[
+  {
+    "name": "Название конкурента",
+    "url": "URL из результатов поиска",
+    "description": "Описание из результатов поиска",
+    "features": ["функция 1", "функция 2"],
+    "pricing": "Ценовая модель",
+    "strengths": ["сила 1", "сила 2"],
+    "weaknesses": ["слабость 1", "слабость 2"]
+  }
+]`;
+
+  try {
+    const response = await llm.chat({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.3
+    });
+    
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (error) {
+    console.error('[LLM] Error extracting competitors:', error);
+  }
+  
+  return [];
+}
+
+// Search for market information
+async function searchMarketInfo(industry: string): Promise<{
+  marketSize: string;
+  marketTrends: string[];
+}> {
+  const trendResults = await searchWeb(`${industry} рынок тренды рост 2024 2025`, 5);
+  
+  const trends: string[] = [];
+  for (const result of trendResults) {
+    if (result.snippet && result.snippet.length > 20) {
+      trends.push(result.snippet.substring(0, 100));
+    }
+  }
+  
+  return {
+    marketSize: 'Данные из веб-поиска',
+    marketTrends: trends.slice(0, 5),
+  };
+}
+
+// Generate SWOT analysis using LLM
+async function generateSWOTAnalysis(
+  competitor: CompetitorInfo,
+  productName: string
+): Promise<{
   strengths: string[];
   weaknesses: string[];
   opportunities: string[];
   threats: string[];
-} {
-  // Уникальные Opportunities на основе слабостей конкурента
-  const opportunities: string[] = [];
+}> {
+  const llm = new LLM();
   
-  // Если у конкурента сложный интерфейс - наше преимущество простота
-  if (comp.weaknesses.some(w => w.toLowerCase().includes('сложн') || w.toLowerCase().includes('интерфейс'))) {
-    opportunities.push('Упрощение интерфейса для быстрого старта');
-  }
-  
-  // Если у конкурента высокая цена - наше преимущество доступность
-  if (comp.weaknesses.some(w => w.toLowerCase().includes('цен') || w.toLowerCase().includes('дорог'))) {
-    opportunities.push('Более доступное ценообразование');
-  }
-  
-  // Если у конкурента ограниченный функционал
-  if (comp.weaknesses.some(w => w.toLowerCase().includes('ограничен') || w.toLowerCase().includes('нет '))) {
-    opportunities.push('Добавление недостающего функционала');
-  }
-  
-  // Если нет мобильного приложения
-  if (comp.weaknesses.some(w => w.toLowerCase().includes('приложен'))) {
-    opportunities.push('Современное мобильное приложение');
-  }
-  
-  // Если мало интеграций
-  if (comp.weaknesses.some(w => w.toLowerCase().includes('интеграц'))) {
-    opportunities.push('Расширение интеграций');
-  }
-  
-  // Дефолтные если не нашли специфичных
-  if (opportunities.length < 2) {
-    opportunities.push('Локализация для РФ');
-    opportunities.push('Персонализация под клиента');
-  }
-  
-  // Уникальные Threats на основе сильных сторон конкурента
-  const threats: string[] = [];
-  
-  // Если конкурент лидер рынка
-  if (comp.strengths.some(s => s.toLowerCase().includes('лидер') || s.toLowerCase().includes('бренд'))) {
-    threats.push('Сильный бренд конкурента');
-  }
-  
-  // Если богатый функционал
-  if (comp.strengths.some(s => s.toLowerCase().includes('функционал') || s.toLowerCase().includes('возможности'))) {
-    threats.push('Богатый функционал конкурента');
-  }
-  
-  // Если есть интеграции
-  if (comp.strengths.some(s => s.toLowerCase().includes('интеграц'))) {
-    threats.push('Экосистема интеграций');
-  }
-  
-  // Если низкая цена
-  if (comp.pricing && (comp.pricing.includes('Бесплатн') || comp.pricing.includes('от 290') || comp.pricing.includes('от 490'))) {
-    threats.push('Демпинг цен');
-  }
-  
-  // Если есть сообщество
-  if (comp.strengths.some(s => s.toLowerCase().includes('сообществ') || s.toLowerCase().includes('популярн'))) {
-    threats.push('Сетевой эффект');
-  }
-  
-  // Дефолтные если не нашли специфичных
-  if (threats.length < 2) {
-    threats.push('Привычки пользователей');
-    threats.push('Необходимость обучения');
+  const prompt = `Проведи SWOT-анализ конкурента "${competitor.name}" по сравнению с нашим продуктом "${productName}".
+
+Конкурент: ${competitor.name}
+URL: ${competitor.url}
+Описание: ${competitor.description}
+Функции: ${competitor.features.join(', ')}
+Цены: ${competitor.pricing}
+Сильные стороны: ${competitor.strengths.join(', ')}
+Слабые стороны: ${competitor.weaknesses.join(', ')}
+
+Ответь в формате JSON:
+{
+  "strengths": ["сила 1", "сила 2", "сила 3"],
+  "weaknesses": ["слабость 1", "слабость 2"],
+  "opportunities": ["возможность 1", "возможность 2"],
+  "threats": ["угроза 1", "угроза 2"]
+}`;
+
+  try {
+    const response = await llm.chat({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5
+    });
+    
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (error) {
+    console.error('[SWOT] Error:', error);
   }
   
   return {
-    strengths: comp.strengths,
-    weaknesses: comp.weaknesses,
-    opportunities: opportunities.slice(0, 4),
-    threats: threats.slice(0, 4)
+    strengths: competitor.strengths || [],
+    weaknesses: competitor.weaknesses || [],
+    opportunities: [],
+    threats: [],
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACT PRODUCT INFO FROM IDEA TEXT
+// ═══════════════════════════════════════════════════════════════════════════
+
+function extractProductInfo(ideaText: string): { name: string; description: string; industry: string } {
+  // Extract name
+  const nameMatch = ideaText.match(/(?:Название|Название идеи)[^:]*:?\s*\*?\*?([^*\n]+)/i);
+  const name = nameMatch ? nameMatch[1].trim().replace(/\*\*/g, '') : 'Продукт';
+  
+  // Extract description
+  const descMatch = ideaText.match(/(?:Описание|Описание сути)[^:]*:?\s*([^\n]+(?:\n[^\n#]+)*?)(?=\n###|\n##|$)/i);
+  const description = descMatch ? descMatch[1].trim().replace(/[═=*]/g, '').trim() : '';
+  
+  // Extract industry
+  const industryMatch = ideaText.match(/(?:Отрасль|Индустрия|Сфера)[^:]*:?\s*([^\n]+)/i);
+  const industry = industryMatch ? industryMatch[1].trim() : '';
+  
+  return { name, description, industry };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FORMAT HTML OUTPUT
+// ═══════════════════════════════════════════════════════════════════════════
+
+function formatCompetitorHtml(
+  comp: CompetitorInfo & { swot?: { strengths: string[]; weaknesses: string[]; opportunities: string[]; threats: string[] } },
+  index: number
+): string {
+  const swot = comp.swot || { strengths: comp.strengths, weaknesses: comp.weaknesses, opportunities: [], threats: [] };
+  
+  return `
+<div style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; background: white;">
+  <div style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; padding: 16px 20px;">
+    <h3 style="margin: 0; font-size: 18px; font-weight: 600;">${index + 1}. ${comp.name}</h3>
+    <a href="${comp.url}" style="color: rgba(255,255,255,0.8); text-decoration: none; font-size: 14px;">${comp.url}</a>
+  </div>
+  <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+    <tr style="background: #f8fafc;">
+      <td style="padding: 12px 20px; font-weight: 600; width: 140px; color: #64748b;">📝 Описание</td>
+      <td style="padding: 12px 20px;">${comp.description}</td>
+    </tr>
+    <tr>
+      <td style="padding: 12px 20px; font-weight: 600; color: #64748b;">💰 Цена</td>
+      <td style="padding: 12px 20px;">${comp.pricing || 'Не указано'}</td>
+    </tr>
+    <tr style="background: #f8fafc;">
+      <td style="padding: 12px 20px; font-weight: 600; color: #64748b; vertical-align: top;">⚡ Функции</td>
+      <td style="padding: 12px 20px;">
+        ${comp.features.map(f => `<span style="display: inline-block; background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 999px; font-size: 12px; margin: 2px;">${f}</span>`).join(' ')}
+      </td>
+    </tr>
+  </table>
+  <table style="width: 100%; border-collapse: collapse; font-size: 14px; border-top: 1px solid #e5e7eb;">
+    <thead>
+      <tr>
+        <th style="padding: 12px 16px; background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; width: 50%; text-align: left;">✅ Сильные стороны</th>
+        <th style="padding: 12px 16px; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; width: 50%; text-align: left;">❌ Слабые стороны</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="vertical-align: top;">
+        <td style="padding: 16px; border: 1px solid #e5e7eb; background: #f0fdf4;">
+          <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+            ${swot.strengths.map(s => `<li style="color: #166534; margin-bottom: 6px;"><strong style="color: #15803d;">${s}</strong></li>`).join('\n            ')}
+          </ul>
+        </td>
+        <td style="padding: 16px; border: 1px solid #e5e7eb;">
+          <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+            ${swot.weaknesses.map(w => `<li style="color: #991b1b; margin-bottom: 6px;">${w}</li>`).join('\n            ')}
+          </ul>
+        </td>
+      </tr>
+      <tr>
+        <th style="padding: 12px 16px; background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; text-align: left;">💡 Возможности</th>
+        <th style="padding: 12px 16px; background: #fefce8; color: #854d0e; border: 1px solid #fef08a; text-align: left;">⚠️ Угрозы</th>
+      </tr>
+      <tr style="vertical-align: top;">
+        <td style="padding: 16px; border: 1px solid #e5e7eb; background: #f8fafc;">
+          <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+            ${swot.opportunities.map(o => `<li style="color: #1e40af; margin-bottom: 6px;">${o}</li>`).join('\n            ')}
+          </ul>
+        </td>
+        <td style="padding: 16px; border: 1px solid #e5e7eb; background: #fffbeb;">
+          <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+            ${swot.threats.map(t => `<li style="color: #854d0e; margin-bottom: 6px;">${t}</li>`).join('\n            ')}
+          </ul>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN API HANDLER
+// ═══════════════════════════════════════════════════════════════════════════
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
   
   try {
     const body = await request.json();
-    const { idea, correction, userCompetitors } = body;
+    const { idea, correction } = body;
 
     if (!idea) {
       return NextResponse.json({ 
@@ -818,149 +302,153 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    console.log('[CompetitorsSearch] Starting analysis...');
-    console.log('[CompetitorsSearch] Idea:', idea.substring(0, 100));
-    console.log('[CompetitorsSearch] Correction:', correction?.substring(0, 100));
-    console.log('[CompetitorsSearch] User competitors:', userCompetitors);
+    console.log('[CompetitorsSearch] Starting REAL web search...');
 
-    // Определяем категорию и название продукта
-    const category = detectCategory(idea + ' ' + (correction || ''));
-    const productName = extractProductName(idea);
+    // Extract product info from idea text
+    const { name: productName, description, industry } = extractProductInfo(idea);
     
-    console.log(`[CompetitorsSearch] Category: ${category}, Product: ${productName}`);
+    console.log(`[CompetitorsSearch] Product: "${productName}"`);
+    console.log(`[CompetitorsSearch] Industry: "${industry}"`);
 
-    // Получаем базу конкурентов
-    const knowledgeBase = COMPETITORS_KNOWLEDGE_BASE[category] || COMPETITORS_KNOWLEDGE_BASE.dashboard;
+    // Build search queries based on extracted info
+    const searchQueries = [
+      `${productName} конкуренты аналоги Россия`,
+      `${industry} программное обеспечение конкуренты`,
+      `${productName} alternatives competitors software`,
+    ];
     
-    // Выбираем конкурентов
-    let directCompetitors = [...knowledgeBase.russian];
+    if (correction) {
+      searchQueries.unshift(`${correction} конкуренты`);
+    }
+
+    // Perform web searches
+    console.log('[CompetitorsSearch] Searching web for competitors...');
+    const allResults: SearchResult[] = [];
     
-    // Если пользователь указал конкретных конкурентов - ищем их в базе
-    if (userCompetitors && userCompetitors.length > 0) {
-      // Добавляем международных конкурентов
-      directCompetitors = [...directCompetitors, ...knowledgeBase.international];
+    for (const query of searchQueries) {
+      const results = await searchWeb(query, 5);
+      allResults.push(...results);
     }
     
-    // Берём до 5 конкурентов
-    const selectedCompetitors = directCompetitors.slice(0, 5);
+    console.log(`[CompetitorsSearch] Found ${allResults.length} search results`);
+
+    // Extract competitors using LLM
+    console.log('[CompetitorsSearch] Extracting competitors from search results...');
+    let competitors = await extractCompetitorsFromSearch(productName, description, allResults);
     
-    // Формируем анализ
-    let analysis = `## 🔍 Конкурентный анализ для "${productName}"
-
-### Тип продукта: ${getCategoryName(category)}
-
----
-
-### 1. ПРЯМЫЕ КОНКУРЕНТЫ
-
-`;
-
-    selectedCompetitors.forEach((comp, i) => {
-      const swot = generateSWOT(comp, productName);
-      
-      analysis += `#### ${i + 1}. ${comp.name}
-- **Сайт:** ${comp.url}
-- **Описание:** ${comp.description}
-- **Основные функции:** ${comp.features.join(', ')}
-- **Ценовая модель:** ${comp.pricing}
-
-**SWOT-анализ:**
-
-| Сильные стороны | Слабые стороны |
-|-----------------|----------------|
-| ${swot.strengths.join('<br>')} | ${swot.weaknesses.join('<br>')} |
-
-| Возможности | Угрозы |
-|-------------|--------|
-| ${swot.opportunities.join('<br>')} | ${swot.threats.join('<br>')} |
-
-`;
-    });
-
-    // Косвенные конкуренты
-    const indirectCompetitors = knowledgeBase.international.slice(0, 3);
+    // Limit to 5 competitors
+    competitors = competitors.slice(0, 5);
     
-    analysis += `### 2. КОСВЕННЫЕ КОНКУРЕНТЫ (зарубежные решения)
+    console.log(`[CompetitorsSearch] Extracted ${competitors.length} competitors`);
 
-${indirectCompetitors.map((comp, i) => `#### ${i + 1}. ${comp.name}
-- **Сайт:** ${comp.url}
-- **Описание:** ${comp.description}
-- **Почему косвенный:** ${comp.weaknesses.slice(0, 2).join(', ')} - ограничивает использование в РФ
-`).join('\n')}
+    // Generate SWOT for each competitor
+    console.log('[CompetitorsSearch] Generating SWOT analyses...');
+    for (const comp of competitors) {
+      comp.swot = await generateSWOTAnalysis(comp, productName);
+    }
 
-### 3. СРАВНИТЕЛЬНАЯ ТАБЛИЦА
+    // Search for market info
+    const marketInfo = await searchMarketInfo(industry || productName);
 
-| Критерий | ${selectedCompetitors.slice(0, 3).map(c => c.name).join(' | ')} | ${productName} |
-|----------|${selectedCompetitors.slice(0, 3).map(() => '----------|').join('')}----------|
-| Функциональность | ${selectedCompetitors.slice(0, 3).map(() => '⭐⭐⭐⭐').join(' | ')} | ⭐⭐⭐⭐ |
-| Цена | ${selectedCompetitors.slice(0, 3).map(c => c.pricing.includes('Бесплатн') || c.pricing.includes('от 290') || c.pricing.includes('от 400') ? '⭐⭐⭐⭐⭐' : '⭐⭐⭐').join(' | ')} | ⭐⭐⭐⭐ |
-| UX/UI | ${selectedCompetitors.slice(0, 3).map(() => '⭐⭐⭐').join(' | ')} | ⭐⭐⭐⭐⭐ |
-| Поддержка РФ | ${selectedCompetitors.slice(0, 3).map(() => '⭐⭐⭐⭐').join(' | ')} | ⭐⭐⭐⭐⭐ |
+    // Generate HTML output
+    const competitorsHtml = competitors.map((c, i) => formatCompetitorHtml(c, i)).join('\n');
+    
+    const comparisonTable = competitors.length > 0 ? `
+  <h2 style="font-size: 18px; color: #1e293b; border-bottom: 2px solid #8b5cf6; padding-bottom: 8px; margin: 28px 0 20px 0;">📊 3. Сравнительная таблица</h2>
+  
+  <table style="width: 100%; border-collapse: collapse; font-size: 14px; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <thead>
+      <tr style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); color: white;">
+        <th style="padding: 14px 16px; text-align: left;">Критерий</th>
+        ${competitors.slice(0, 3).map(c => `<th style="padding: 14px 16px; text-align: center;">${c.name}</th>`).join('')}
+        <th style="padding: 14px 16px; text-align: center; background: #f0fdf4;">${productName}</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding: 12px 16px; font-weight: 600;">🛠 Функциональность</td>
+        ${competitors.slice(0, 3).map(() => '<td style="padding: 12px 16px; text-align: center;">⭐⭐⭐⭐</td>').join('')}
+        <td style="padding: 12px 16px; text-align: center; background: #f0fdf4; font-weight: 600; color: #166534;">⭐⭐⭐⭐⭐</td>
+      </tr>
+      <tr style="background: #f8fafc;">
+        <td style="padding: 12px 16px; font-weight: 600;">🎨 UX/UI</td>
+        ${competitors.slice(0, 3).map(() => '<td style="padding: 12px 16px; text-align: center;">⭐⭐⭐</td>').join('')}
+        <td style="padding: 12px 16px; text-align: center; background: #f0fdf4; font-weight: 600; color: #166534;">⭐⭐⭐⭐⭐</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px 16px; font-weight: 600;">🇷🇺 Поддержка РФ</td>
+        ${competitors.slice(0, 3).map(() => '<td style="padding: 12px 16px; text-align: center;">⭐⭐⭐⭐</td>').join('')}
+        <td style="padding: 12px 16px; text-align: center; background: #f0fdf4; font-weight: 600; color: #166534;">⭐⭐⭐⭐⭐</td>
+      </tr>
+    </tbody>
+  </table>` : '';
 
-### 4. АНАЛИЗ РЫНКА
-
-**Размер рынка:** ${knowledgeBase.marketSize}
-
-**Тренды роста:**
-${knowledgeBase.marketTrends.map(t => `- ${t}`).join('\n')}
-
-### 5. ВОЗМОЖНОСТИ ДИФФЕРЕНЦИАЦИИ
-
-На основе анализа конкурентов, ключевые возможности для **${productName}**:
-
-1. **Упрощение интерфейса** — большинство конкурентов имеют перегруженный UI
-2. **Локализация для РФ** — работа с российскими платёжными системами и сервисами
-3. **Специализация** — фокус на конкретной нише (малый бизнес, определённая отрасль)
-4. **Ценовая доступность** — прозрачное ценообразование без скрытых платежей
-5. **Персонализация** — кастомизация под конкретные потребности клиента
-
-### 6. РЕКОМЕНДАЦИИ ПО ПОЗИЦИОНИРОВАНИЮ
-
-${productName} должен позиционироваться как:
-- **Простое решение** с быстрым стартом (vs сложные Enterprise-решения)
-- **Локальный продукт** с поддержкой на русском и интеграцией с российскими сервисами
-- **Доступное решение** с прозрачным ценообразованием
-
-### 7. ИСТОЧНИКИ
-
-${selectedCompetitors.map(c => `- [${c.name}](${c.url})`).join('\n')}
-${indirectCompetitors.map(c => `- [${c.name}](${c.url})`).join('\n')}
-`;
+    const analysis = `
+<div style="font-family: system-ui, -apple-system, sans-serif; max-width: 100%; color: #1f2937;">
+  <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); color: white; padding: 28px; border-radius: 16px; margin-bottom: 28px;">
+    <h1 style="margin: 0 0 8px 0; font-size: 24px;">🔍 Конкурентный анализ</h1>
+    <h2 style="margin: 0 0 16px 0; font-size: 20px; font-weight: 400; opacity: 0.9;">${productName}</h2>
+    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+      <div style="background: rgba(255,255,255,0.1); padding: 8px 14px; border-radius: 8px;">
+        <span style="opacity: 0.7; font-size: 12px;">Отрасль</span><br/>
+        <span style="font-weight: 600; font-size: 14px;">${industry || 'Не указана'}</span>
+      </div>
+      <div style="background: rgba(255,255,255,0.1); padding: 8px 14px; border-radius: 8px;">
+        <span style="opacity: 0.7; font-size: 12px;">Конкурентов найдено</span><br/>
+        <span style="font-weight: 600; font-size: 14px;">${competitors.length}</span>
+      </div>
+      <div style="background: rgba(255,255,255,0.1); padding: 8px 14px; border-radius: 8px;">
+        <span style="opacity: 0.7; font-size: 12px;">Источник</span><br/>
+        <span style="font-weight: 600; font-size: 14px;">🌐 Веб-поиск</span>
+      </div>
+    </div>
+  </div>
+  
+  <h2 style="font-size: 18px; color: #1e293b; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; margin: 0 0 20px 0;">🏢 1. Прямые конкуренты</h2>
+  
+  ${competitorsHtml || '<p style="color: #6b7280; font-style: italic;">Конкуренты не найдены. Попробуйте уточнить описание продукта.</p>'}
+  
+  ${comparisonTable}
+  
+  <h2 style="font-size: 18px; color: #1e293b; border-bottom: 2px solid #8b5cf6; padding-bottom: 8px; margin: 28px 0 20px 0;">🌍 4. Рыночный контекст</h2>
+  
+  <div style="background: #f8fafc; border-left: 4px solid #8b5cf6; padding: 20px 24px; border-radius: 0 12px 12px 0; margin-bottom: 24px;">
+    <p style="margin: 0 0 12px 0;"><strong>Тренды:</strong></p>
+    <ul style="margin: 0; padding-left: 20px;">
+      ${marketInfo.marketTrends.map(t => `<li style="margin-bottom: 4px;">${t}</li>`).join('\n      ')}
+    </ul>
+  </div>
+  
+  <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); color: white; padding: 24px; border-radius: 12px; margin-top: 28px;">
+    <h3 style="margin: 0 0 12px 0; font-size: 18px;">💡 Рекомендации по позиционированию</h3>
+    <p style="margin: 0; opacity: 0.9;">
+      ${productName} должен позиционироваться как современное решение с фокусом на:
+      <br/>• Удобство интерфейса
+      <br/>• Интеграции с существующими системами
+      <br/>• Поддержка российского рынка
+    </p>
+  </div>
+  
+  <div style="margin-top: 28px; padding: 16px; background: #f8fafc; border-radius: 8px; font-size: 12px; color: #6b7280;">
+    📊 Анализ выполнен на основе веб-поиска • ${new Date().toLocaleDateString('ru-RU')} • ${Date.now() - startTime}ms
+  </div>
+</div>`;
 
     console.log(`[CompetitorsSearch] Analysis completed in ${Date.now() - startTime}ms`);
-
-    return NextResponse.json({
-      success: true,
+    
+    return NextResponse.json({ 
+      success: true, 
       analysis,
-      searchResultsCount: selectedCompetitors.length + indirectCompetitors.length,
+      competitorsCount: competitors.length,
       searchPerformed: true,
-      category
+      searchDate: new Date().toISOString()
     });
 
   } catch (error) {
     console.error('[CompetitorsSearch] Error:', error);
-    return NextResponse.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to analyze competitors' 
     }, { status: 500 });
   }
-}
-
-function getCategoryName(category: string): string {
-  const names: Record<string, string> = {
-    fitness: 'SportTech / Фитнес-клубы',
-    aquarium: 'Аквариумистика / Зоотовары',
-    ats: 'Виртуальная АТС / Телефония',
-    dashboard: 'Бизнес-дашборд / Аналитика',
-    crm: 'CRM-система',
-    messenger: 'Мессенджер / Коммуникации',
-    booking: 'Онлайн-запись / Календарь записи',
-    taxi: 'Такси / Транспортные сервисы',
-    ecommerce: 'E-commerce / Маркетплейс',
-    logistics: 'Логистика / Доставка',
-    education: 'EdTech / Образование',
-    healthcare: 'Медицина / Здравоохранение',
-    fintech: 'FinTech / Платёжные сервисы'
-  };
-  return names[category] || 'Программный продукт';
 }
