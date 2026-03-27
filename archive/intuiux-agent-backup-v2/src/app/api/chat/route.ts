@@ -1,0 +1,5346 @@
+// API Chat Route - Refactored with pure context extraction
+// v3.2: Added competitor-analyzer for unique SWOT per competitor
+import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import ZAI from 'z-ai-web-dev-sdk';
+import { extractIdeaFromText, formatIdeaAsMarkdown } from '@/lib/idea-extractor';
+import { analyzeCompetitors, formatCompetitorAnalysisAsMarkdown } from '@/lib/competitor-analyzer';
+
+let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+
+async function getZAI() {
+  if (!zaiInstance) {
+    zaiInstance = await ZAI.create();
+  }
+  return zaiInstance;
+}
+
+const AGENT_PROMPTS: Record<string, string> = {
+  transcription_analyst: `Ты — эксперт по анализу идей продуктов. 
+КРИТИЧЕСКИ ВАЖНО: Анализируй КОНКРЕТНЫЙ текст пользователя. 
+- НЕ используй шаблоны интернет-магазина
+- НЕ придумывай абстрактные продукты
+- Извлекай идею ТОЛЬКО из предоставленного текста
+Отвечай на русском языке.`,
+  
+  brand_marketer: `Ты — маркетолог с 15-летним опытом конкурентного анализа.
+КРИТИЧЕСКИ ВАЖНО: 
+- Анализируй КОНКРЕТНУЮ идею из раздела "СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА"
+- НЕ используй шаблоны интернет-магазина
+- Ищи РЕАЛЬНЫХ конкурентов для этого типа продукта
+- Если в идее указан конкретный продукт (например, "приложение для поиска попутчиков"), ищи конкурентов ИМЕННО в этой нише
+Отвечай на русском языке.`,
+  
+  cjm_researcher: `Ты — исследователь Customer Journey Map.
+КРИТИЧЕСКИ ВАЖНО:
+- Создавай CJM ТОЛЬКО для продукта из раздела "СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА"
+- НЕ используй шаблоны интернет-магазина
+- Этапы пути должны отражать КОНКРЕТНЫЕ функции этого продукта
+- Используй Mermaid journey для визуализации
+Отвечай на русском языке.`,
+  
+  ia_architect: `Ты — архитектор информационной архитектуры.
+КРИТИЧЕСКИ ВАЖНО:
+- Создавай ИА ТОЛЬКО для продукта из раздела "СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА"
+- НЕ используй шаблоны интернет-магазина
+- Сущности и разделы должны отражать КОНКРЕТНЫЕ функции этого продукта
+- Используй Mermaid mindmap и erDiagram
+Отвечай на русском языке.`,
+  
+  userflow_researcher: `Ты — UX-исследователь пользовательских сценариев.
+  
+═══════════════════════════════════════════════════════════════
+🚨 ГЛАВНОЕ ПРАВИЛО (НАРУШЕНИЕ = ОШИБКА)
+═══════════════════════════════════════════════════════════════
+Userflow создаётся ТОЛЬКО из контекста:
+1. ИДЕИ — название, функции, описание продукта
+2. IA — страницы и разделы из информационной архитектуры
+
+ЗАПРЕЩЕНО:
+- Использовать шаблоны (корзина, каталог, бронирование и т.д.)
+- Придумывать шаги, которых нет в Идее или IA
+- Добавлять абстрактные сценарии
+
+ОБЯЗАТЕЛЬНО:
+- Извлекать шаги из раздела "СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА"
+- Использовать страницы из раздела IA
+- Каждый шаг должен соответствовать реальной функции продукта
+- Использовать Mermaid flowchart для визуализации
+Отвечай на русском языке.`,
+  
+  task_architect: `Ты — специалист по юзабилити-тестированию.
+КРИТИЧЕСКИ ВАЖНО:
+- Создавай материалы ТОЛЬКО для продукта из раздела "СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА"
+- НЕ используй шаблоны интернет-магазина
+- Задачи и вопросы должны относиться к КОНКРЕТНЫМ функциям этого продукта
+Отвечай на русском языке.`,
+  
+  prototyper: `Ты — прототипировщик интерактивных HTML приложений в стиле Taiga (https://taiga-landing.vercel.app/).
+
+═══════════════════════════════════════════════════════════════
+🎯 КОНТЕКСТНАЯ ГЕНЕРАЦИЯ (КРИТИЧЕСКИ ВАЖНО)
+═══════════════════════════════════════════════════════════════
+
+Ты должен создать прототип на основе ВСЕХ предыдущих этапов:
+
+1. **ИЗ ИДЕИ** возьми:
+   - Название продукта
+   - Описание сути проблемы
+   - Целевую аудиторию
+   - Ключевые функции (максимум 5)
+
+2. **ИЗ КОНКУРЕНТОВ** возьми:
+   - Уникальное преимущество (дифференциация)
+   - Функции, которых нет у конкурентов
+
+3. **ИЗ CJM** возьми:
+   - Ключевые точки касания
+   - Эмоциональное состояние пользователя
+   - Pain points для решения
+
+4. **ИЗ IA** возьми:
+   - Структуру разделов приложения
+   - Ключевые сущности
+
+5. **ИЗ USERFLOW** возьми:
+   - Последовательность экранов
+   - Переходы между шагами
+   - Ключевые действия пользователя
+
+═══════════════════════════════════════════════════════════════
+🎨 ДИЗАЙН-СИСТЕМА TAIGA
+═══════════════════════════════════════════════════════════════
+
+Цвета:
+- Фон: #000000, #0A0A0A, #141414
+- Акцент: #FACC15 (жёлтый) — кнопки, иконки, важные метрики
+- Текст: #FFFFFF (основной), #A3A3A3 (вторичный), #737373 (muted)
+- Success: #22C55E, Error: #EF4444
+
+Шрифты:
+- Inter — для всего текста
+- JetBrains Mono — для цифр и кода
+
+Анимации (CSS keyframes):
+- float: translateY для парящих элементов
+- glow: box-shadow для свечения
+- shimmer: background-position для мерцания текста
+- pulse: scale для пульсации
+- scanline: translateY для линии сканирования
+
+Эффекты:
+- Backdrop blur на header
+- Card glow при hover
+- Grid background
+- Gradient text
+
+═══════════════════════════════════════════════════════════════
+📱 СТРУКТУРА ПРИЛОЖЕНИЯ (адаптируй под Userflow!)
+═══════════════════════════════════════════════════════════════
+
+Реализуй многоэкранное приложение с навигацией через showScreen(id):
+
+1. **SPLASH/HERO экран** 
+   - Логотип продукта (первые буквы названия)
+   - Название из Идеи
+   - Value proposition из Идеи
+   - CTA кнопка "Начать"
+
+2. **ONBOARDING** (2-3 шага)
+   - Знакомство с ключевыми функциями из Идеи
+   - Прогресс-бар
+   - Кнопки "Далее/Пропустить"
+
+3. **ГЛАВНЫЙ ЭКРАН (Dashboard)**
+   - Header с навигацией
+   - Виджеты с метриками (из Идеи и CJM)
+   - Быстрые действия (функции из Идеи)
+   - Bottom navigation
+
+4. **ЭКРАНЫ ФУНКЦИЙ** (для каждого ключевого действия из Userflow)
+   - Формы ввода данных
+   - Кнопки действий
+   - Отображение результатов
+   - Навигация "Назад"
+
+5. **РЕЗУЛЬТАТ/УСПЕХ**
+   - Подтверждение действия
+   - Иконка успеха
+   - Кнопки "На главную/Новое действие"
+
+6. **ПРОФИЛЬ/НАСТРОЙКИ**
+   - Информация пользователя
+   - Настройки приложения
+   - Выход
+
+═══════════════════════════════════════════════════════════════
+🔧 ТЕХНИЧЕСКИЕ ТРЕБОВАНИЯ
+═══════════════════════════════════════════════════════════════
+
+JavaScript функции:
+- showScreen(id) — переключение экранов
+- showTab(tabId) — переключение вкладок
+- showToast(message) — уведомления
+
+Формат:
+- Полный HTML в одном блоке
+- CSS в <style>
+- JavaScript в <script>
+- Google Fonts: Inter, JetBrains Mono
+
+ВАЖНО:
+- НЕ создавай landing page — создай ИНТЕРАКТИВНОЕ ПРИЛОЖЕНИЕ
+- Каждый экран должен отражать КОНКРЕТНЫЙ контекст из Идеи
+- Названия кнопок, заголовков — из Идеи и Userflow`
+};
+
+// === HELPER FUNCTIONS FOR AUTO-DEPLOYMENT ===
+
+// Transliterate Russian to English for URL slug
+function transliterateToSlug(text: string): string {
+  const ruToEn: Record<string, string> = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+    'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+    'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+    'А': 'a', 'Б': 'b', 'В': 'v', 'Г': 'g', 'Д': 'd', 'Е': 'e', 'Ё': 'yo',
+    'Ж': 'zh', 'З': 'z', 'И': 'i', 'Й': 'y', 'К': 'k', 'Л': 'l', 'М': 'm',
+    'Н': 'n', 'О': 'o', 'П': 'p', 'Р': 'r', 'С': 's', 'Т': 't', 'У': 'u',
+    'Ф': 'f', 'Х': 'kh', 'Ц': 'ts', 'Ч': 'ch', 'Ш': 'sh', 'Щ': 'sch',
+    'Ъ': '', 'Ы': 'y', 'Ь': '', 'Э': 'e', 'Ю': 'yu', 'Я': 'ya',
+    ' ': '-', '_': '-', '/': '-', '\\': '-'
+  };
+  
+  // Transliterate first, then clean up
+  let slug = text
+    .split('')
+    .map(char => ruToEn[char] ?? char)
+    .join('')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '') // Keep only latin letters, numbers, and dashes
+    .replace(/-+/g, '-') // Replace multiple dashes
+    .replace(/^-|-$/g, '') // Trim dashes
+    .substring(0, 50); // Limit length
+  
+  const randomSuffix = Math.random().toString(36).substring(2, 8);
+  return `${slug}-${randomSuffix}`;
+}
+
+// Extract product name from message or response
+function extractProductName(message: string, response: string): string {
+  // Try to find name in the response header
+  const headerMatch = response.match(/## 🎨 Интерактивный прототип "?([^"\n]+)"?/);
+  if (headerMatch && headerMatch[1]) {
+    return headerMatch[1].trim();
+  }
+  
+  // Try to find name in the message
+  const ideaMatch = message.match(/Название идеи[^*]*\*\*([^*]+)\*\*/);
+  if (ideaMatch && ideaMatch[1]) {
+    return ideaMatch[1].trim();
+  }
+  
+  // Try to find in ## 💡 section
+  const nameMatch = message.match(/## 💡\s*Название идеи\s*\n\*?\*?([^*\n]+)/);
+  if (nameMatch && nameMatch[1]) {
+    return nameMatch[1].trim();
+  }
+  
+  return 'Prototype';
+}
+
+// Check accessibility
+function checkAccessibility(html: string): { score: number; issues: string[] } {
+  const issues: string[] = [];
+  let score = 100;
+  
+  const imgMatches = html.match(/<img[^>]*>/gi) || [];
+  const imgWithoutAlt = imgMatches.filter(img => !img.includes('alt='));
+  if (imgWithoutAlt.length > 0) {
+    issues.push(`Images without alt: ${imgWithoutAlt.length}`);
+    score -= 10 * imgWithoutAlt.length;
+  }
+  
+  if (!html.includes('<main') && !html.includes('role="main"')) {
+    issues.push('Missing <main> element');
+    score -= 5;
+  }
+  
+  if (!html.includes('<header') && !html.includes('role="banner"')) {
+    issues.push('Missing <header> element');
+    score -= 5;
+  }
+  
+  if (!html.includes('<nav') && !html.includes('role="navigation"')) {
+    issues.push('Missing <nav> element');
+    score -= 5;
+  }
+  
+  if (!html.includes('lang=')) {
+    issues.push('Missing lang attribute');
+    score -= 5;
+  }
+  
+  if (!html.includes('<title>')) {
+    issues.push('Missing <title>');
+    score -= 10;
+  }
+  
+  if (!html.includes('viewport')) {
+    issues.push('Missing viewport');
+    score -= 5;
+  }
+  
+  return { score: Math.max(0, Math.min(100, score)), issues };
+}
+
+// Deploy prototype to database
+async function deployPrototype(productName: string, htmlContent: string): Promise<{
+  success: boolean;
+  deployment?: {
+    id: string;
+    productName: string;
+    slug: string;
+    url: string;
+    accessibilityScore: number;
+    accessibilityIssues: string[];
+  };
+  error?: string;
+}> {
+  try {
+    // Extract HTML from markdown code block
+    const htmlMatch = htmlContent.match(/```html\s*([\s\S]*?)```/);
+    const cleanHtml = htmlMatch && htmlMatch[1] ? htmlMatch[1].trim() : htmlContent;
+    
+    const slug = transliterateToSlug(productName);
+    const accessibility = checkAccessibility(cleanHtml);
+    
+    const deployment = await db.prototypeDeployment.create({
+      data: {
+        productName,
+        slug,
+        htmlContent: cleanHtml,
+        accessibilityScore: accessibility.score,
+        accessibilityIssues: JSON.stringify(accessibility.issues),
+        status: 'deployed',
+        vercelUrl: `/api/prototype/${slug}`,
+        deployedAt: new Date()
+      }
+    });
+    
+    return {
+      success: true,
+      deployment: {
+        id: deployment.id,
+        productName: deployment.productName,
+        slug: deployment.slug,
+        url: deployment.vercelUrl || `/api/prototype/${deployment.slug}`,
+        accessibilityScore: accessibility.score,
+        accessibilityIssues: accessibility.issues
+      }
+    };
+  } catch (error) {
+    console.error('Deploy prototype error:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to deploy'
+    };
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const startTime = Date.now();
+  
+  try {
+    const body = await request.json();
+    const { agentId, agentType, message, conversationId } = body;
+    
+    let actualAgentType = agentType;
+    let agent = null;
+    
+    if (agentId && !agentType) {
+      agent = await db.agent.findUnique({ where: { id: agentId } });
+      if (agent) {
+        actualAgentType = agent.type;
+      }
+    }
+    
+    if (!message) {
+      return NextResponse.json({ success: false, error: 'Message is required' }, { status: 400 });
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SPECIAL HANDLING: transcription_analyst uses ALGORITHMIC extraction v12.0
+    // CRITICAL FIX: NO TEMPLATES - Extract industry FROM TEXT
+    // ═══════════════════════════════════════════════════════════════
+    if (actualAgentType === 'transcription_analyst') {
+      console.log('[transcription_analyst v12.0] NO TEMPLATES - extracting from text');
+      
+      try {
+        // Use algorithmic extraction
+        const extractedIdea = extractIdeaFromText(message);
+        const formattedOutput = formatIdeaAsMarkdown(extractedIdea);
+        
+        // Log extraction results (v11.0 - no templates)
+        console.log(`[transcription_analyst v11.0] Extracted:
+          - Name: "${extractedIdea.name}"
+          - Industry: "${extractedIdea.industry}" → "${extractedIdea.subIndustry}"
+          - Functions: ${extractedIdea.functions.length}
+          - User Stories: ${extractedIdea.userStories.length}
+          - Target Audience: "${extractedIdea.userTypes?.substring(0, 50) || 'N/A'}..."
+        `);
+        
+        return NextResponse.json({
+          success: true,
+          response: formattedOutput,
+          conversationId: null,
+          extractionLog: extractedIdea.extractionLog.slice(0, 20), // For debugging
+        });
+      } catch (extractError) {
+        console.error('[transcription_analyst] Extraction error:', extractError);
+        // Fall through to LLM fallback
+      }
+    }
+    
+    let conversation;
+    const effectiveAgentId = agentId || `pipeline-${actualAgentType}`;
+    
+    const existingAgent = await db.agent.findUnique({ where: { id: effectiveAgentId } });
+    const saveToDb = !!existingAgent;
+    
+    if (saveToDb) {
+      if (conversationId) {
+        conversation = await db.conversation.findUnique({ where: { id: conversationId } });
+      }
+      if (!conversation) {
+        conversation = await db.conversation.create({
+          data: { agentId: effectiveAgentId, title: message.substring(0, 50) }
+        });
+      }
+    }
+    
+    if (saveToDb && conversation) {
+      await db.message.create({
+        data: { conversationId: conversation.id, role: 'user', content: message }
+      });
+    }
+    
+    const systemPrompt = AGENT_PROMPTS[actualAgentType] || `Ты — AI-ассистент. Помогай пользователю.`;
+    
+    let aiResponse = '';
+    
+    try {
+      const zai = await getZAI();
+      
+      const messages = [
+        { role: 'assistant' as const, content: systemPrompt },
+        { role: 'user' as const, content: message }
+      ];
+      
+      const timeoutPromise = new Promise<null>((_, reject) => {
+        setTimeout(() => reject(new Error('Timeout')), 30000);
+      });
+      
+      const completionPromise = zai.chat.completions.create({
+        messages,
+        thinking: { type: 'disabled' }
+      });
+      
+      const completion = await Promise.race([completionPromise, timeoutPromise]);
+      
+      if (completion && completion.choices && completion.choices[0]) {
+        aiResponse = completion.choices[0].message?.content || '';
+      }
+      
+      console.log(`AI response time for ${actualAgentType}: ${Date.now() - startTime}ms`);
+      
+    } catch (aiError) {
+      console.log(`AI timeout/error after ${Date.now() - startTime}ms, using fallback`);
+      aiResponse = getFallbackResponse(actualAgentType, message);
+    }
+    
+    if (!aiResponse || aiResponse.trim().length === 0) {
+      aiResponse = getFallbackResponse(actualAgentType, message);
+    }
+    
+    if (saveToDb && conversation) {
+      await db.message.create({
+        data: { conversationId: conversation.id, role: 'assistant', content: aiResponse }
+      });
+    }
+    
+    // Auto-deploy prototype after generation
+    let deploymentInfo = null;
+    if (actualAgentType === 'prototyper' && aiResponse.includes('```html')) {
+      try {
+        const productName = extractProductName(message, aiResponse);
+        const deploymentResult = await deployPrototype(productName, aiResponse);
+        if (deploymentResult.success) {
+          deploymentInfo = deploymentResult.deployment;
+          console.log(`[Auto-deploy] Prototype deployed: ${deploymentInfo.url}`);
+          // Add deployment link to response
+          aiResponse += `\n\n---\n\n## 🚀 Прототип развёрнут\n\n**Ссылка на прототип:** [${deploymentInfo.url}](${deploymentInfo.url})\n\n**Оценка доступности:** ${deploymentInfo.accessibilityScore}/100\n\n${deploymentInfo.accessibilityIssues.length > 0 ? `**Замечания по доступности:**\n${deploymentInfo.accessibilityIssues.map((i: string) => `- ${i}`).join('\n')}` : '✅ Все основные проверки доступности пройдены'}`;
+        }
+      } catch (deployError) {
+        console.error('[Auto-deploy] Failed:', deployError);
+      }
+    }
+    
+    return NextResponse.json({
+      success: true,
+      response: aiResponse,
+      conversationId: conversation?.id || null,
+      deployment: deploymentInfo
+    });
+    
+  } catch (error) {
+    console.error('Error in chat:', error);
+    return NextResponse.json({ success: false, error: 'Failed to process message' }, { status: 500 });
+  }
+}
+
+// Extract idea from the message - improved version
+function extractFormedIdea(message: string): { name: string; description: string; functions: string[] } {
+  let ideaText = '';
+  
+  // Pattern 1: Section with separator lines and "СФОРМИРОВАННАЯ ИДЕЯ" (with emoji and parentheses)
+  const separatorMatch = message.match(/[═=]{5,}[^═=]*🎯?\s*СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА[^═=]*[\s\S]*?[═=]{5,}/i);
+  if (separatorMatch) {
+    ideaText = separatorMatch[0];
+    console.log('[extractFormedIdea] Found via pattern 1 (separator section)');
+  }
+  
+  // Pattern 2: Look for the content after "СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА" (with optional emoji and parentheses)
+  if (!ideaText) {
+    const ideaMatch = message.match(/🎯?\s*СФОРМИРОВАННАЯ ИДЕЯ ПРОДУКТА[^═=\n]*[\s\S]*?(?=Предыдущий контекст|═══|===|════════|$)/i);
+    if (ideaMatch) {
+      ideaText = ideaMatch[0];
+      console.log('[extractFormedIdea] Found via pattern 2 (ИДЕЯ header)');
+    }
+  }
+  
+  // Pattern 3: Look for ## 💡 section
+  if (!ideaText) {
+    const ideaMatch = message.match(/## 💡[^\n]*[\s\S]*?(?=## \d|===|Предыдущий|$)/i);
+    if (ideaMatch) {
+      ideaText = ideaMatch[0];
+      console.log('[extractFormedIdea] Found via pattern 3 (## 💡 header)');
+    }
+  }
+  
+  // Pattern 4: Content between ═══ sections containing product info
+  if (!ideaText) {
+    const sectionMatch = message.match(/════════[^═]*═══[\s\S]*?(?=════════|Предыдущий|$)/i);
+    if (sectionMatch) {
+      ideaText = sectionMatch[0];
+      console.log('[extractFormedIdea] Found via pattern 4 (═══ section)');
+    }
+  }
+  
+  if (!ideaText) {
+    ideaText = message.substring(0, 1500);
+    console.log('[extractFormedIdea] Using fallback - first 1500 chars');
+  }
+  
+  // Extract name - clean from markdown
+  let name = 'Продукт';
+  
+  // Pattern: ## 💡 Название идеи\n**Name** or ## 💡 Название идеи\nName
+  const nameLineMatch = ideaText.match(/## 💡\s*Название идеи\s*\n\*?\*?([^*\n]+)\*?\*?/i);
+  if (nameLineMatch && nameLineMatch[1]) {
+    const extracted = nameLineMatch[1].trim();
+    if (extracted.length > 2) {
+      name = extracted;
+      console.log(`[extractFormedIdea] Found name via header: "${name}"`);
+    }
+  }
+  
+  // Try bold text after "Название идеи"
+  if (name === 'Продукт') {
+    const boldMatch = ideaText.match(/Название идеи[^\n]*\n\s*\*\*([^*]+)\*\*/i);
+    if (boldMatch && boldMatch[1]) {
+      name = boldMatch[1].trim();
+      console.log(`[extractFormedIdea] Found name via bold: "${name}"`);
+    }
+  }
+  
+  // Clean name from markdown and extra characters
+  name = name.replace(/\*\*/g, '').replace(/["«»]/g, '').trim();
+  
+  // Extract description
+  let description = 'Инновационный продукт для решения задач пользователей';
+  const descPatterns = [
+    /(?:Описание сути|Описание)[^:]*:?\s*([^\n]+(?:\n[^\n#]+)*?)(?=\n###|\n##|$)/i,
+  ];
+  
+  for (const pattern of descPatterns) {
+    const match = ideaText.match(pattern);
+    if (match && match[1]) {
+      const extracted = match[1].trim().replace(/[═=*]/g, '').trim();
+      if (extracted.length > 10) {
+        description = extracted.substring(0, 200);
+        break;
+      }
+    }
+  }
+  
+  // Extract functions - properly from "Основные функции" section only
+  const functions: string[] = [];
+  
+  // Pattern for "Основные функции" section
+  const funcSectionMatch = ideaText.match(/(?:Основные функции|Функции)[^:]*:?\s*([\s\S]*?)(?=\n###|\n##|---|$)/i);
+  if (funcSectionMatch && funcSectionMatch[1]) {
+    const section = funcSectionMatch[1];
+    // Match numbered items: 1. Function name
+    const funcLines = section.match(/\d+\.\s+[^\n]+/g);
+    if (funcLines) {
+      funcLines.slice(0, 6).forEach(line => {
+        const func = line.replace(/^\d+\.\s*/, '').replace(/\*\*/g, '').trim();
+        // Filter out metrics (they contain "цель:", "—", etc.)
+        if (func && func.length > 5 && !func.includes('цель:') && !func.includes('— цель')) {
+          functions.push(func.substring(0, 80));
+        }
+      });
+    }
+  }
+  
+  // Default functions if none found
+  if (functions.length === 0) {
+    functions.push('Основная функция продукта');
+    functions.push('Дополнительные возможности');
+    functions.push('Настройки и профиль');
+  }
+  
+  console.log(`[extractFormedIdea] Result - name: "${name}", functions: [${functions.slice(0, 2).join(', ')}...]`);
+  
+  return { name, description, functions };
+}
+
+// === PRODUCT TYPE DETECTION ===
+
+interface ProductType {
+  id: string;
+  name: string;
+  keywords: string[];
+  marketSize: string;
+  trends: string[];
+  barriers: string[];
+  positioning: string;
+}
+
+interface Competitor {
+  name: string;
+  url: string;
+  country: string;
+  description: string;
+  features: string;
+  pricing: string;
+  targetAudience: string;
+  strengths: string[];
+  weaknesses: string[];
+  opportunities: string[];
+  threats: string[];
+  functionalityScore: string;
+  priceScore: string;
+  uxScore: string;
+  supportScore: string;
+}
+
+interface IndirectCompetitor {
+  name: string;
+  description: string;
+  approach: string;
+  overlap: string;
+  differentiation: string;
+}
+
+// === УНИВЕРСАЛЬНАЯ БАЗА ОТРАСЛЕЙ И КОНКУРЕНТОВ ===
+// Структура: каждая отрасль содержит ключевые слова, прямых и косвенных конкурентов
+
+interface IndustryData {
+  id: string;
+  name: string;
+  keywords: string[];
+  marketSize: string;
+  trends: string[];
+  barriers: string[];
+  positioning: string;
+  directCompetitors: Array<{
+    name: string;
+    url: string;
+    country: string;
+    description: string;
+    features: string;
+    pricing: string;
+    targetAudience: string;
+    strengths: string[];
+    weaknesses: string[];
+    opportunities: string[];
+    threats: string[];
+    functionalityScore: string;
+    priceScore: string;
+    uxScore: string;
+    supportScore: string;
+  }>;
+  indirectCompetitors: Array<{
+    name: string;
+    description: string;
+    approach: string;
+    overlap: string;
+    differentiation: string;
+  }>;
+}
+
+const INDUSTRIES_DATABASE: IndustryData[] = [
+  // === RETAIL & E-COMMERCE ===
+  {
+    id: 'ecommerce_general',
+    name: 'E-commerce / Интернет-магазин',
+    keywords: ['магазин', 'shop', 'ecommerce', 'торгов', 'заказ', 'корзин', 'товар', 'купить', 'продаж', 'каталог', 'доставк'],
+    marketSize: '$6 трлн глобально',
+    trends: ['Маркетплейсы', 'Social commerce', 'Персонализация', 'Быстрая доставка'],
+    barriers: ['Логистика', 'Конкуренция', 'Обработка платежей'],
+    positioning: 'современная платформа электронной коммерции',
+    directCompetitors: [
+      {
+        name: 'Ozon',
+        url: 'https://ozon.ru',
+        country: 'Россия',
+        description: 'Крупнейший маркетплейс России',
+        features: 'Маркетплейс, доставка, реклама, фулфилмент',
+        pricing: 'Комиссия 15-30%',
+        targetAudience: 'Массовый покупатель',
+        strengths: ['Трафик', 'Доставка', 'Экосистема', 'Бренд'],
+        weaknesses: ['Комиссии', 'Конкуренция продавцов', 'Ценовые войны'],
+        opportunities: ['B2B', 'Экспорт', 'Финтех'],
+        threats: ['Wildberries', 'Регулирование'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Wildberries',
+        url: 'https://wildberries.ru',
+        country: 'Россия',
+        description: 'Лидер маркетплейсов по охвату',
+        features: 'Маркетплейс, реклама, логистика',
+        pricing: 'Комиссия 10-25%',
+        targetAudience: 'Массовый покупатель, эконом-сегмент',
+        strengths: ['Цены', 'Охват', 'Скорость доставки'],
+        weaknesses: ['Качество сервиса', 'Условия для продавцов', 'Поддержка'],
+        opportunities: ['Премиум сегмент', 'Экспорт', 'Услуги'],
+        threats: ['Ozon', 'Регулирование'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐'
+      },
+      {
+        name: 'Яндекс.Маркет',
+        url: 'https://market.yandex.ru',
+        country: 'Россия',
+        description: 'Платформа сравнения цен и покупок',
+        features: 'Сравнение цен, отзывы, доставка Плюсом',
+        pricing: 'Комиссия + реклама',
+        targetAudience: 'Рациональные покупатели',
+        strengths: ['Сравнение', 'Экосистема Яндекса', 'Плюс'],
+        weaknesses: ['Меньше продавцов', 'Логистика'],
+        opportunities: ['Интеграции', 'B2B'],
+        threats: ['Маркетплейсы'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Социальные сети', description: 'VK, Instagram для продаж', approach: 'Контент-маркетинг', overlap: 'Привлечение клиентов', differentiation: 'Нет каталога, сложно искать' },
+      { name: 'Офлайн-розница', description: 'Традиционные магазины', approach: 'Покупка на месте', overlap: 'Продажа товаров', differentiation: 'Нет онлайн-заказа, ограниченный ассортимент' },
+      { name: 'Доски объявлений', description: 'Avito, Юла', approach: 'Частные объявления', overlap: 'Поиск товаров', differentiation: 'Нет магазина, нет гарантий' }
+    ]
+  },
+  {
+    id: 'aquarium',
+    name: 'Аквариумистика / Зоотовары',
+    keywords: ['аквариум', 'рыб', 'водоросл', 'аквариумист', 'креветк', 'растен вод', 'фильтр аквариум', 'океан', 'акваскейп', 'подводн', 'tropical fish', 'aquascaping', 'домашн аквариум', 'морск рыб'],
+    marketSize: '$5 млрд глобально (aquarium)',
+    trends: ['Премиум сегмент', 'Онлайн-продажи', 'Видео-контент', 'Консультации'],
+    barriers: ['Специфика живого товара', 'Логистика', 'Экспертиза'],
+    positioning: 'экспертный магазин для аквариумистов',
+    directCompetitors: [
+      {
+        name: 'AquaLogo',
+        url: 'https://aqualogo.ru',
+        country: 'Россия',
+        description: 'Крупнейший магазин аквариумистики',
+        features: 'Рыбы, растения, оборудование, блог',
+        pricing: 'Розничные цены',
+        targetAudience: 'Аквариумисты всех уровней',
+        strengths: ['Ассортимент', 'Доставка', 'Блог', 'Филиалы'],
+        weaknesses: ['Дизайн сайта', 'Нет бронирования', 'Слабые фильтры'],
+        opportunities: ['Приложение', 'Видео', 'Консультации'],
+        threats: ['Маркетплейсы', 'Локальные магазины'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Akvarimir',
+        url: 'https://akvarimir.ru',
+        country: 'Россия',
+        description: 'Сеть магазинов аквариумистики',
+        features: 'Живой товар, оборудование, корма',
+        pricing: 'Средние цены',
+        targetAudience: 'Любители аквариумистики',
+        strengths: ['Живой товар', 'Офлайн-магазины', 'Консультации'],
+        weaknesses: ['Слабый сайт', 'Мало контента', 'Ограниченная география'],
+        opportunities: ['Онлайн', 'SEO', 'Доставка'],
+        threats: ['Крупные конкуренты', 'Маркетплейсы'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Avito (аквариумистика)',
+        url: 'https://avito.ru',
+        country: 'Россия',
+        description: 'Доска объявлений с аквариумистикой',
+        features: 'Частные объявления, живой товар',
+        pricing: 'Бесплатно',
+        targetAudience: 'Экономные покупатели',
+        strengths: ['Бесплатно', 'Локальность', 'Прямой контакт'],
+        weaknesses: ['Нет гарантий', 'Нет доставки живого', 'Риски'],
+        opportunities: ['Верификация', 'Интеграции'],
+        threats: ['Специализированные магазины'],
+        functionalityScore: '⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Зоомагазины', description: 'Pet-ритейлеры', approach: 'Универсальный ассортимент', overlap: 'Корма, оборудование', differentiation: 'Нет специализации, ограниченный выбор' },
+      { name: 'Маркетплейсы', description: 'Ozon, WB', approach: 'Массовые продажи', overlap: 'Оборудование, корма', differentiation: 'Нет живого товара' },
+      { name: 'Форумы и сообщества', description: 'Аквариумные форумы', approach: 'Бартер и частные продажи', overlap: 'Поиск редких видов', differentiation: 'Нет магазина, нет гарантий' }
+    ]
+  },
+  {
+    id: 'food_delivery',
+    name: 'Доставка еды / Рестораны',
+    keywords: ['доставк ед', 'ресторан', 'кафе', 'меню', 'блюд', 'заказ ед', 'пицц', 'суши', 'бургер', 'еда'],
+    marketSize: '$300 млрд глобально',
+    trends: ['Dark kitchens', 'Подписки', 'Быстрая доставка', 'Здоровое питание'],
+    barriers: ['Логистика', 'Качество', 'Маржа'],
+    positioning: 'сервис доставки еды',
+    directCompetitors: [
+      {
+        name: 'Яндекс.Еда',
+        url: 'https://eda.yandex.ru',
+        country: 'Россия',
+        description: 'Лидер доставки еды',
+        features: 'Доставка, рестораны, продукты, Плюс',
+        pricing: 'Комиссия + доставка',
+        targetAudience: 'Массовый потребитель',
+        strengths: ['Охват', 'Скорость', 'Экосистема', 'Плюс'],
+        weaknesses: ['Комиссии', 'Качество курьеров'],
+        opportunities: ['Подписки', 'Dark kitchens'],
+        threats: ['Delivery Club', 'Самокат'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Delivery Club',
+        url: 'https://delivery-club.ru',
+        country: 'Россия',
+        description: 'Платформа доставки еды',
+        features: 'Доставка из ресторанов, продукты',
+        pricing: 'Комиссия + доставка',
+        targetAudience: 'Массовый потребитель',
+        strengths: ['Рестораны', 'Программа лояльности'],
+        weaknesses: ['Меньше охват', 'Зависимость от VK'],
+        opportunities: ['Интеграция с VK', 'Подписки'],
+        threats: ['Яндекс.Еда'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Самокат',
+        url: 'https://samokat.ru',
+        country: 'Россия',
+        description: 'Быстрая доставка продуктов',
+        features: 'Продукты за 15 минут, дарксторы',
+        pricing: 'Доставка от 0₽',
+        targetAudience: 'Городские жители',
+        strengths: ['Скорость', 'Ассортимент', 'Качество'],
+        weaknesses: ['Ограниченная география', 'Минимальный заказ'],
+        opportunities: ['Расширение', 'Готовая еда'],
+        threats: ['Яндекс.Лавка', 'Еаптека'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Собственная доставка ресторанов', description: 'Прямой заказ', approach: 'Позвонить/сайт ресторана', overlap: 'Доставка еды', differentiation: 'Один ресторан, нет сравнения' },
+      { name: 'Кулинария супермаркетов', description: 'Готовая еда', approach: 'Покупка на месте', overlap: 'Готовая еда', differentiation: 'Нет доставки, ограниченный выбор' },
+      { name: 'Мобильные приложения сетей', description: 'Приложения ресторанных сетей', approach: 'Заказ в приложении', overlap: 'Доставка', differentiation: 'Только одна сеть' }
+    ]
+  },
+  // === TELECOM ===
+  {
+    id: 'telecom_salon',
+    name: 'Салон связи / Оператор',
+    keywords: ['салон связи', 'сим-карт', 'симкарт', 'оператор', 'мобильн', 'тариф', 'мтс', 'билайн', 'мегафон', 'теле2', 'yota', 'абонент', 'номер'],
+    marketSize: '$10 млрд рынок мобильной связи в РФ',
+    trends: ['ESIM', 'MVNO', 'Бандлы', 'Цифровые сервисы'],
+    barriers: ['Лицензирование', 'Инфраструктура', 'Конкуренция'],
+    positioning: 'современный салон связи',
+    directCompetitors: [
+      {
+        name: 'МТС',
+        url: 'https://mts.ru',
+        country: 'Россия',
+        description: 'Крупнейший оператор и сеть салонов',
+        features: 'Связь, интернет, ТВ, устройства, финтех',
+        pricing: 'Федеральные тарифы',
+        targetAudience: 'Массовый потребитель',
+        strengths: ['Покрытие', 'Бренд', 'Экосистема', 'Салоны'],
+        weaknesses: ['Очереди', 'Агрессивные продажи', 'Сложные тарифы'],
+        opportunities: ['ESIM', 'Финтех', '5G'],
+        threats: ['MVNO', 'Онлайн-продажи'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Билайн',
+        url: 'https://beeline.ru',
+        country: 'Россия',
+        description: 'Федеральный оператор',
+        features: 'Связь, интернет, ТВ, устройства',
+        pricing: 'Конкурентные тарифы',
+        targetAudience: 'Массовый потребитель',
+        strengths: ['Бренд', 'Тарифы', 'Салоны'],
+        weaknesses: ['Качество связи', 'Сервис'],
+        opportunities: ['B2B', 'Финтех'],
+        threats: ['Конкуренция', 'MVNO'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Тинькофф Мобайл',
+        url: 'https://tinkoffmobile.ru',
+        country: 'Россия',
+        description: 'MVNO с цифровым сервисом',
+        features: 'Связь, приложение, кэшбэк',
+        pricing: 'Прозрачные тарифы',
+        targetAudience: 'Цифровое поколение',
+        strengths: ['Приложение', 'Сервис', 'Кэшбэк', 'Без салонов'],
+        weaknesses: ['Нет салонов', 'Зависимость от сетей'],
+        opportunities: ['Расширение', 'B2B'],
+        threats: ['Операторы', 'Регулирование'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Онлайн-магазины операторов', description: 'Цифровые каналы', approach: 'Заказ онлайн', overlap: 'Сим-карты, устройства', differentiation: 'Нет консультаций' },
+      { name: 'Маркетплейсы', description: 'Ozon, WB', approach: 'Продажа устройств', overlap: 'Смартфоны, аксессуары', differentiation: 'Нет услуг связи' },
+      { name: 'MVNO', description: 'Виртуальные операторы', approach: 'Полностью онлайн', overlap: 'Мобильная связь', differentiation: 'Нет салонов' }
+    ]
+  },
+  // === SAAS & B2B ===
+  {
+    id: 'saas_crm',
+    name: 'CRM-система',
+    keywords: ['crm', 'клиент', 'customer', 'продаж', 'sales', 'лид', 'lead', 'сделк', 'deal', 'воронк'],
+    marketSize: '$80 млрд глобально',
+    trends: ['AI-прогнозы', 'Автоматизация', 'Интеграции', 'Мобильность'],
+    barriers: ['Миграция', 'Обучение', 'Привычки'],
+    positioning: 'CRM для бизнеса',
+    directCompetitors: [
+      {
+        name: 'Битрикс24',
+        url: 'https://bitrix24.ru',
+        country: 'Россия',
+        description: 'Комплексная CRM и платформа',
+        features: 'CRM, задачи, сайт, магазин, мессенджер',
+        pricing: 'Бесплатно до 5 пользователей',
+        targetAudience: 'Малый и средний бизнес',
+        strengths: ['Бесплатный тариф', 'Всё в одном', 'Локализация'],
+        weaknesses: ['Перегруженность', 'Скорость', 'Сложность'],
+        opportunities: ['AI', 'Интеграции', 'Маркетплейс'],
+        threats: ['AmoCRM', 'Зарубежные решения'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'AmoCRM',
+        url: 'https://amocrm.ru',
+        country: 'Россия',
+        description: 'CRM для продаж',
+        features: 'Воронка, интеграции, автоматизация',
+        pricing: 'от 799₽/мес',
+        targetAudience: 'Отделы продаж',
+        strengths: ['Простота', 'Воронка', 'Интуитивность'],
+        weaknesses: ['Ограниченный функционал', 'Цена за пользователей'],
+        opportunities: ['AI', 'Мобильность'],
+        threats: ['Битрикс24', 'Мегафон (покупка)'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Salesforce',
+        url: 'https://salesforce.com',
+        country: 'США',
+        description: 'Мировой лидер CRM',
+        features: 'Sales Cloud, AI Einstein, интеграции',
+        pricing: 'от $25/мес за пользователя',
+        targetAudience: 'Средний и крупный бизнес',
+        strengths: ['Функциональность', 'AI', 'Экосистема'],
+        weaknesses: ['Цена', 'Сложность', 'Нет русского'],
+        opportunities: ['РФ рынок', 'SMB'],
+        threats: ['Санкции', 'Локальные решения'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Excel / Google Sheets', description: 'Таблицы для учёта', approach: 'Самостоятельный учёт', overlap: 'Хранение данных', differentiation: 'Нет автоматизации' },
+      { name: 'Notion', description: 'All-in-one workspace', approach: 'Гибкие базы', overlap: 'Управление данными', differentiation: 'Нет специализации CRM' },
+      { name: 'Мессенджеры', description: 'WhatsApp, Telegram', approach: 'Чат с клиентами', overlap: 'Коммуникация', differentiation: 'Нет CRM-функций' }
+    ]
+  },
+  {
+    id: 'saas_platform',
+    name: 'SaaS-платформа / Облачный сервис',
+    keywords: ['saas', 'облачн', 'подписк', 'subscription', 'api', 'интеграц', 'b2b', 'автоматизац', 'workflow', 'enterprise'],
+    marketSize: '$200 млрд глобально',
+    trends: ['AI', 'No-code/Low-code', 'Интеграции', 'Микросервисы'],
+    barriers: ['Привычки', 'Безопасность', 'Миграция'],
+    positioning: 'SaaS для бизнеса',
+    directCompetitors: [
+      {
+        name: 'Лидер ниши',
+        url: 'https://competitor.com',
+        country: 'США/Европа',
+        description: 'Ведущий игрок в нише',
+        features: 'Полный функционал, API, интеграции',
+        pricing: 'от $50-500/мес',
+        targetAudience: 'Средний и крупный бизнес',
+        strengths: ['Функциональность', 'Бренд', 'Интеграции'],
+        weaknesses: ['Цена', 'Сложность', 'Нет локализации'],
+        opportunities: ['AI', 'Новые рынки'],
+        threats: ['Новые игроки', 'Open source'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Российский аналог',
+        url: 'https://competitor.ru',
+        country: 'Россия',
+        description: 'Локальное SaaS-решение',
+        features: 'Основной функционал, РФ-интеграции',
+        pricing: 'от 5000-50000₽/мес',
+        targetAudience: 'Российский бизнес',
+        strengths: ['Локализация', 'Интеграции РФ', 'Поддержка'],
+        weaknesses: ['Ограниченный функционал', 'Масштабируемость'],
+        opportunities: ['Импортозамещение', 'AI'],
+        threats: ['Международные игроки'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐⭐'
+      },
+      {
+        name: 'No-code платформа',
+        url: 'https://nocode.app',
+        country: 'Интернациональный',
+        description: 'Конструктор решений',
+        features: 'Drag-and-drop, автоматизации',
+        pricing: 'от $10-100/мес',
+        targetAudience: 'Малый бизнес, стартапы',
+        strengths: ['Гибкость', 'Цена', 'Быстрый старт'],
+        weaknesses: ['Ограничения', 'Vendor lock'],
+        opportunities: ['AI-генерация', 'Шаблоны'],
+        threats: ['Специализированные решения'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Excel / Google Sheets', description: 'Таблицы', approach: 'Самостоятельный учёт', overlap: 'Данные', differentiation: 'Нет автоматизации' },
+      { name: 'Notion / Coda', description: 'All-in-one workspace', approach: 'Гибкие базы', overlap: 'Управление данными', differentiation: 'Нет специализации' },
+      { name: 'Open source', description: 'Бесплатные решения', approach: 'Self-hosted', overlap: 'Базовый функционал', differentiation: 'Требует техзнаний' }
+    ]
+  },
+  // === SERVICE & BOOKING ===
+  {
+    id: 'booking_service',
+    name: 'Онлайн-запись / Бронирование',
+    keywords: ['запись', 'брон', 'календар', 'слот', 'расписание', 'записаться', 'yclients', 'dikidi', 'салон красоты', 'мастер', 'клиник', 'услуг'],
+    marketSize: '$2 млрд глобально (online booking)',
+    trends: ['Мессенджеры', 'Напоминания', 'AI-подбор', 'Виджеты'],
+    barriers: ['Привычка звонить', 'Интеграции', 'SMS-стоимость'],
+    positioning: 'сервис онлайн-записи',
+    directCompetitors: [
+      {
+        name: 'YCLIENTS',
+        url: 'https://yclients.ru',
+        country: 'Россия',
+        description: 'Лидер онлайн-записи',
+        features: 'Запись, CRM, склад, бухгалтерия',
+        pricing: 'от 990₽/мес',
+        targetAudience: 'Салоны, клиники',
+        strengths: ['Функционал', 'Интеграции', 'Бесплатный тариф'],
+        weaknesses: ['Сложность', 'Цена расширенных функций'],
+        opportunities: ['AI', 'Видео-консультации'],
+        threats: ['Dikidi', 'Нишевые решения'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Dikidi',
+        url: 'https://dikidi.net',
+        country: 'Россия',
+        description: 'Простой сервис записи',
+        features: 'Запись, расписание, уведомления',
+        pricing: 'от 490₽/мес',
+        targetAudience: 'Мастера, малые салоны',
+        strengths: ['Простота', 'Дизайн', 'Цена'],
+        weaknesses: ['Ограниченный функционал', 'Нет склада'],
+        opportunities: ['Расширение функций', 'Аналитика'],
+        threats: ['YCLIENTS', 'Бесплатные альтернативы'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Sonline',
+        url: 'https://sonline.su',
+        country: 'Россия',
+        description: 'Бюджетный сервис записи',
+        features: 'Запись, SMS, отчёты',
+        pricing: 'от 290₽/мес',
+        targetAudience: 'Салоны, клиники',
+        strengths: ['Низкая цена', 'Простота', 'SMS включены'],
+        weaknesses: ['Базовый функционал', 'Мало интеграций'],
+        opportunities: ['Интеграции', 'AI'],
+        threats: ['Крупные конкуренты'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Мессенджеры', description: 'WhatsApp, Telegram', approach: 'Переписка с мастером', overlap: 'Запись', differentiation: 'Нет автоматизации' },
+      { name: 'Google Calendar', description: 'Календарь', approach: 'Ручное расписание', overlap: 'Управление временем', differentiation: 'Нет клиентской части' },
+      { name: 'Телефон', description: 'Звонки', approach: 'Запись по телефону', overlap: 'Запись', differentiation: 'Нет напоминаний, занимает время' }
+    ]
+  },
+  // === FINTECH ===
+  {
+    id: 'fintech_banking',
+    name: 'FinTech / Банковское приложение',
+    keywords: ['фин', 'fin', 'банк', 'bank', 'платёж', 'payment', 'деньги', 'money', 'бухгалт', 'перевод', 'карт', 'card'],
+    marketSize: '$300 млрд глобально',
+    trends: ['Neobanking', 'Крипто', 'BNPL', 'Открытые API'],
+    barriers: ['Регулирование', 'Безопасность', 'Доверие'],
+    positioning: 'финансовое приложение',
+    directCompetitors: [
+      {
+        name: 'Тинькофф Банк',
+        url: 'https://tinkoff.ru',
+        country: 'Россия',
+        description: 'Цифровой банк №1',
+        features: 'Карты, кредиты, инвестиции, бизнес',
+        pricing: 'Бесплатное обслуживание',
+        targetAudience: 'Цифровое поколение, бизнес',
+        strengths: ['Приложение', 'Сервис', 'Экосистема', 'Инновации'],
+        weaknesses: ['Нет отделений', 'Строгие проверки'],
+        opportunities: ['Крипто', 'B2B', 'Зарубежье'],
+        threats: ['Санкции', 'Сбер', 'Конкуренция'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐⭐'
+      },
+      {
+        name: 'СберБанк',
+        url: 'https://sberbank.ru',
+        country: 'Россия',
+        description: 'Крупнейший банк России',
+        features: 'Все финансовые услуги, экосистема',
+        pricing: 'Разнообразные тарифы',
+        targetAudience: 'Массовый рынок',
+        strengths: ['Охват', 'Отделения', 'Государство', 'Экосистема'],
+        weaknesses: ['Перегруженность', 'Очереди', 'Устаревшие процессы'],
+        opportunities: ['AI', 'Цифровизация', 'Экосистема'],
+        threats: ['Тинькофф', 'Цифровые банки'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Альфа-Банк',
+        url: 'https://alfabank.ru',
+        country: 'Россия',
+        description: 'Частный банк с инновациями',
+        features: 'Карты, кредиты, бизнес, инвестиции',
+        pricing: 'Конкурентные тарифы',
+        targetAudience: 'Средний класс, бизнес',
+        strengths: ['Инновации', 'Сервис', 'Бизнес-направление'],
+        weaknesses: ['Меньше отделений', 'Менее известен'],
+        opportunities: ['B2B', 'Цифровые услуги'],
+        threats: ['Сбер', 'Тинькофф'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Электронные кошельки', description: 'ЮMoney, QIWI', approach: 'Электронные платежи', overlap: 'Платежи', differentiation: 'Ограниченный функционал' },
+      { name: 'Криптобиржи', description: 'Bybit, OKX', approach: 'Крипто-активы', overlap: 'Инвестиции', differentiation: 'Волатильность, регулирование' },
+      { name: 'Наличные', description: 'Физические деньги', approach: 'Оплата наличными', overlap: 'Платежи', differentiation: 'Нет цифровых функций' }
+    ]
+  },
+  // === HEALTH ===
+  {
+    id: 'healthtech',
+    name: 'HealthTech / Медицинское приложение',
+    keywords: ['медицин', 'health', 'врач', 'doctor', 'здоров', 'клиник', 'clinic', 'пациент', 'телemed', 'телемед'],
+    marketSize: '$500 млрд глобально',
+    trends: ['Telemedicine', 'AI-диагностика', 'Wearables', 'Персонализация'],
+    barriers: ['Регулирование', 'Данные', 'Принятие врачами'],
+    positioning: 'цифровой помощник для здоровья',
+    directCompetitors: [
+      {
+        name: 'СберЗдоровье',
+        url: 'https://sberhealth.ru',
+        country: 'Россия',
+        description: 'Телемедицина и запись к врачам',
+        features: 'Онлайн-консультации, запись, ДМС',
+        pricing: 'от 499₽ за консультацию',
+        targetAudience: 'Массовый рынок',
+        strengths: ['Охват', 'Интеграция со Сбером', 'Врачи'],
+        weaknesses: ['Очереди на консультации', 'Качество врачей'],
+        opportunities: ['AI-диагностика', 'Мониторинг'],
+        threats: ['Конкуренция', 'Регулирование'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Доктор рядом',
+        url: 'https://doktorryadom.ru',
+        country: 'Россия',
+        description: 'Телемедицина и клиники',
+        features: 'Консультации, клиники, диагностика',
+        pricing: 'Подписки и разовые',
+        targetAudience: 'Семьи, бизнес',
+        strengths: ['Сеть клиник', 'Качество', 'B2B'],
+        weaknesses: ['Ограниченная география'],
+        opportunities: ['Расширение', 'AI'],
+        threats: ['СберЗдоровье', 'Ингосстрах'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'ProDoctorov',
+        url: 'https://prodoctorov.ru',
+        country: 'Россия',
+        description: 'Агрегатор врачей и клиник',
+        features: 'Поиск врачей, отзывы, запись',
+        pricing: 'Бесплатно для пациентов',
+        targetAudience: 'Пациенты, ищущие врача',
+        strengths: ['База врачей', 'Отзывы', 'Охват'],
+        weaknesses: ['Нет телемедицины', 'Нет диагностики'],
+        opportunities: ['Телемедицина', 'Диагностика'],
+        threats: ['СберЗдоровье', 'Направление.ру'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Государственные поликлиники', description: 'ОМС', approach: 'Бесплатное обслуживание', overlap: 'Медицина', differentiation: 'Очереди, ограниченный сервис' },
+      { name: 'Частные клиники', description: 'Офлайн-медицина', approach: 'Личный приём', overlap: 'Врачи', differentiation: 'Нет онлайн-функций' },
+      { name: 'Аптеки', description: 'Аптечные сети', approach: 'Лекарства', overlap: 'Здоровье', differentiation: 'Нет консультаций врачей' }
+    ]
+  },
+  // === EDUCATION ===
+  {
+    id: 'edtech',
+    name: 'EdTech / Образовательная платформа',
+    keywords: ['образован', 'education', 'курс', 'course', 'обучен', 'learning', 'студент', 'школ', 'урок', 'лектор', 'вебинар'],
+    marketSize: '$400 млрд глобально',
+    trends: ['Microlearning', 'AI-персонализация', 'VR/AR', 'Геймификация'],
+    barriers: ['Качество контента', 'Мотивация', 'Аккредитация'],
+    positioning: 'образовательная платформа',
+    directCompetitors: [
+      {
+        name: 'Skillbox',
+        url: 'https://skillbox.ru',
+        country: 'Россия',
+        description: 'Лидер онлайн-образования',
+        features: 'Курсы, профессии, дипломы',
+        pricing: 'от 3000₽/мес, рассрочка',
+        targetAudience: 'Взрослые, карьерное развитие',
+        strengths: ['Качество', 'Бренд', 'Трудоустройство', 'Рассрочка'],
+        weaknesses: ['Цена', 'Сложность программы'],
+        opportunities: ['AI', 'B2B', 'Дети'],
+        threats: ['Нетология', 'GeekBrains'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Нетология',
+        url: 'https://netology.ru',
+        country: 'Россия',
+        description: 'Образование для digital',
+        features: 'Курсы, профессии, корпоративное обучение',
+        pricing: 'от 2000₽/мес',
+        targetAudience: 'Digital-специалисты, бизнес',
+        strengths: ['Digital-экспертиза', 'B2B', 'Цена'],
+        weaknesses: ['Узкая специализация'],
+        opportunities: ['Расширение', 'AI'],
+        threats: ['Skillbox', 'GeekBrains'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'GeekBrains',
+        url: 'https://geekbrains.ru',
+        country: 'Россия',
+        description: 'IT-образование',
+        features: 'IT-курсы, профессии, стажировки',
+        pricing: 'от 2500₽/мес',
+        targetAudience: 'IT-новички, переквалификация',
+        strengths: ['IT-экспертиза', 'Стажировки', 'Трудоустройство'],
+        weaknesses: ['Сложность', 'Срок обучения'],
+        opportunities: ['AI', 'Сокращённые программы'],
+        threats: ['Skillbox', 'Яндекс.Практикум'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'YouTube', description: 'Бесплатное обучение', approach: 'Видео-уроки', overlap: 'Обучение', differentiation: 'Нет структуры, нет сертификатов' },
+      { name: 'Университеты', description: 'Высшее образование', approach: 'Офлайн-обучение', overlap: 'Образование', differentiation: 'Долго, дорого, диплом' },
+      { name: 'Книги', description: 'Самообразование', approach: 'Чтение', overlap: 'Знания', differentiation: 'Нет интерактивности' }
+    ]
+  },
+  // === LOGISTICS ===
+  {
+    id: 'logistics',
+    name: 'Логистика / Доставка',
+    keywords: ['логистик', 'logistics', 'доставк', 'delivery', 'склад', 'warehouse', 'транспор', 'transport', 'груз', 'перевозк'],
+    marketSize: '$200 млрд глобально',
+    trends: ['Автономная доставка', 'Real-time трекинг', 'AI-оптимизация', 'Зелёная логистика'],
+    barriers: ['Инфраструктура', 'Регулирование', 'Стоимость'],
+    positioning: 'платформа логистики',
+    directCompetitors: [
+      {
+        name: 'СДЭК',
+        url: 'https://cdek.ru',
+        country: 'Россия',
+        description: 'Лидер экспресс-доставки',
+        features: 'Доставка, логистика, фулфилмент',
+        pricing: 'Конкурентные тарифы',
+        targetAudience: 'Бизнес, потребители',
+        strengths: ['Охват', 'Скорость', 'Пункты выдачи'],
+        weaknesses: ['Качество сервиса', 'Поддержка'],
+        opportunities: ['Фулфилмент', 'B2B'],
+        threats: ['Почта России', 'DPD'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Яндекс.Доставка',
+        url: 'https://delivery.yandex.ru',
+        country: 'Россия',
+        description: 'Логистическая платформа',
+        features: 'Доставка, фулфилмент, интеграции',
+        pricing: 'Прозрачные тарифы',
+        targetAudience: 'E-commerce, бизнес',
+        strengths: ['Экосистема', 'Технологии', 'Интеграции'],
+        weaknesses: ['Ограниченная география'],
+        opportunities: ['Расширение', 'Автономная доставка'],
+        threats: ['СДЭК', 'Ozon Логистика'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Ozon Логистика',
+        url: 'https://logistics.ozon.ru',
+        country: 'Россия',
+        description: 'Логистика маркетплейса',
+        features: 'Доставка, склады, фулфилмент',
+        pricing: 'Для продавцов Ozon',
+        targetAudience: 'Продавцы Ozon',
+        strengths: ['Интеграция с Ozon', 'Склады', 'Охват'],
+        weaknesses: ['Только для продавцов Ozon'],
+        opportunities: ['Открытие для всех', 'B2B'],
+        threats: ['СДЭК', 'Яндекс.Доставка'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Собственная логистика', description: 'Свой автопарк', approach: 'Самостоятельная доставка', overlap: 'Доставка', differentiation: 'Высокие затраты, ограниченный охват' },
+      { name: 'Курьерские службы', description: 'Пешкарики и др.', approach: 'Курьерская доставка', overlap: 'Доставка', differentiation: 'Ограниченный функционал' },
+      { name: 'Почта России', description: 'Госпочта', approach: 'Почтовая доставка', overlap: 'Доставка', differentiation: 'Медленно, низкий сервис' }
+    ]
+  },
+  // === PRODUCTIVITY ===
+  {
+    id: 'productivity',
+    name: 'Продуктивность / Управление задачами',
+    keywords: ['задач', 'task', 'проект', 'project', 'kanban', 'trello', 'agile', 'scrumban', 'доска', 'трекер'],
+    marketSize: '$5 млрд глобально',
+    trends: ['AI-планирование', 'Асинхронная работа', 'Интеграции', 'Геймификация'],
+    barriers: ['Привычки', 'Сложность перехода', 'Обучение'],
+    positioning: 'инструмент продуктивности',
+    directCompetitors: [
+      {
+        name: 'Notion',
+        url: 'https://notion.so',
+        country: 'США',
+        description: 'All-in-one workspace',
+        features: 'Заметки, базы, задачи, wiki',
+        pricing: 'Бесплатно + от $8/мес',
+        targetAudience: 'Команды, личное использование',
+        strengths: ['Гибкость', 'Дизайн', 'Бесплатный тариф'],
+        weaknesses: ['Скорость', 'Офлайн', 'Сложность'],
+        opportunities: ['AI', 'Интеграции', 'Enterprise'],
+        threats: ['Конкуренция', 'Локальные решения'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Яндекс.Трекер',
+        url: 'https://tracker.yandex.ru',
+        country: 'Россия',
+        description: 'Управление проектами',
+        features: 'Задачи, доски, очереди, автоматизация',
+        pricing: 'от 140₽/пользователь/мес',
+        targetAudience: 'Команды, бизнес',
+        strengths: ['Локализация', 'Экосистема Яндекса', 'Цена'],
+        weaknesses: ['Меньше интеграций', 'Сложность'],
+        opportunities: ['AI', 'Интеграции'],
+        threats: ['Notion', 'Jira'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Jira',
+        url: 'https://atlassian.com/jira',
+        country: 'США/Австралия',
+        description: 'Лидер управления проектами',
+        features: 'Agile, Scrum, Kanban, интеграции',
+        pricing: 'от $7.75/пользователь/мес',
+        targetAudience: 'IT-команды, enterprise',
+        strengths: ['Функциональность', 'Интеграции', 'Стандарт'],
+        weaknesses: ['Сложность', 'Цена', 'Нет русского'],
+        opportunities: ['Упрощение', 'AI'],
+        threats: ['Notion', 'Monday', 'Санкции'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Excel / Google Sheets', description: 'Таблицы', approach: 'Списки задач', overlap: 'Учёт', differentiation: 'Нет автоматизации' },
+      { name: 'Мессенджеры', description: 'Telegram, Slack', approach: 'Чат-задачи', overlap: 'Коммуникация', differentiation: 'Нет управления проектами' },
+      { name: 'Бумажные планировщики', description: 'Блокноты', approach: 'Ручное планирование', overlap: 'Задачи', differentiation: 'Нет цифровых функций' }
+    ]
+  },
+  // === HR ===
+  {
+    id: 'hr_platform',
+    name: 'HR-платформа / Управление персоналом',
+    keywords: ['hr', 'кадр', 'персонал', 'сотрудник', 'employee', 'рекрут', 'найм', 'onboard', 'зарплат', 'отпуск'],
+    marketSize: '$30 млрд глобально',
+    trends: ['Remote work', 'AI-рекрутинг', 'Wellness', 'Аналитика'],
+    barriers: ['Персональные данные', 'Интеграции', 'Принятие HR'],
+    positioning: 'платформа управления персоналом',
+    directCompetitors: [
+      {
+        name: 'hh.ru',
+        url: 'https://hh.ru',
+        country: 'Россия',
+        description: 'Лидер рекрутинга',
+        features: 'Поиск работы, резюме, отклики',
+        pricing: 'Бесплатно для кандидатов, платно для работодателей',
+        targetAudience: 'Работодатели, кандидаты',
+        strengths: ['База резюме', 'Охват', 'Бренд'],
+        weaknesses: ['Спам', 'Качество откликов'],
+        opportunities: ['AI-подбор', 'HR-сервисы'],
+        threats: ['SuperJob', 'Telegram-каналы'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Сбер HR-портал',
+        url: 'https://sber.ru/hr',
+        country: 'Россия',
+        description: 'HR-экосистема Сбера',
+        features: 'Найм, адаптация, обучение, мотивация',
+        pricing: 'B2B-тарифы',
+        targetAudience: 'Крупный бизнес',
+        strengths: ['Экосистема', 'Технологии', 'Интеграции'],
+        weaknesses: ['Сложность', 'Цена'],
+        opportunities: ['AI', 'SMB'],
+        threats: ['Зарубежные решения'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Workle',
+        url: 'https://workle.ru',
+        country: 'Россия',
+        description: 'HR-платформа для управления персоналом',
+        features: 'Найм, адаптация, обучение, мотивация',
+        pricing: 'от 500₽/сотрудник/мес',
+        targetAudience: 'SMB, средний бизнес',
+        strengths: ['Комплексность', 'Цена', 'Локализация'],
+        weaknesses: ['Ограниченный функционал'],
+        opportunities: ['AI', 'Расширение'],
+        threats: ['Сбер', 'Зарубежные решения'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'LinkedIn', description: 'Профессиональная сеть', approach: 'Нетворкинг', overlap: 'Поиск работы', differentiation: 'Нет полного HR-цикла' },
+      { name: 'Telegram-каналы', description: 'Каналы с вакансиями', approach: 'Публикация вакансий', overlap: 'Рекрутинг', differentiation: 'Нет ATS-функций' },
+      { name: 'Excel', description: 'Таблицы для HR', approach: 'Ручной учёт', overlap: 'Учёт персонала', differentiation: 'Нет автоматизации' }
+    ]
+  },
+  // === REAL ESTATE ===
+  {
+    id: 'real_estate',
+    name: 'Недвижимость / Риелторские услуги',
+    keywords: ['недвиж', 'real estate', 'квартир', 'apartment', 'дом', 'house', 'риелтор', 'rent', 'аренд', 'продаж квартир', 'купить квартир', 'цнан', 'avito недв'],
+    marketSize: '$300 млрд глобально',
+    trends: ['iBuying', 'Виртуальные туры', 'AI-оценка', 'Цифровые сделки'],
+    barriers: ['Доверие', 'Регулирование', 'Локальность'],
+    positioning: 'платформа для работы с недвижимостью',
+    directCompetitors: [
+      {
+        name: 'Циан',
+        url: 'https://cian.ru',
+        country: 'Россия',
+        description: 'Лидер рынка недвижимости',
+        features: 'Поиск, фильтры, ипотека, оценка',
+        pricing: 'Платные объявления, подписки',
+        targetAudience: 'Покупатели, арендаторы, риелторы',
+        strengths: ['База', 'Бренд', 'Инструменты', 'Ипотека'],
+        weaknesses: ['Цена объявлений', 'Много агентов'],
+        opportunities: ['AI-оценка', 'Цифровые сделки'],
+        threats: ['Авито', 'Домклик'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Авито Недвижимость',
+        url: 'https://avito.ru/nedvizhimost',
+        country: 'Россия',
+        description: 'Раздел недвижимости на Авито',
+        features: 'Объявления, поиск, контакты',
+        pricing: 'Бесплатные и платные объявления',
+        targetAudience: 'Частные лица, агенты',
+        strengths: ['Трафик', 'Бесплатно', 'Охват'],
+        weaknesses: ['Качество объявлений', 'Мошенники'],
+        opportunities: ['Верификация', 'Услуги'],
+        threats: ['Циан', 'Домклик'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐'
+      },
+      {
+        name: 'Домклик',
+        url: 'https://domclick.ru',
+        country: 'Россия',
+        description: 'Платформа недвижимости от Сбер',
+        features: 'Поиск, ипотека, сделки, оценка',
+        pricing: 'Бесплатно + платные услуги',
+        targetAudience: 'Покупатели, продавцы, банки',
+        strengths: ['Интеграция со Сбером', 'Ипотека', 'Безопасность'],
+        weaknesses: ['Меньше объявлений', 'Молодой сервис'],
+        opportunities: ['Экосистема', 'AI'],
+        threats: ['Циан', 'Авито'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Риелторы', description: 'Частные агенты', approach: 'Личный сервис', overlap: 'Подбор жилья', differentiation: 'Высокая комиссия, ограниченный охват' },
+      { name: 'Застройщики', description: 'Прямые продажи', approach: 'Новостройки', overlap: 'Покупка квартир', differentiation: 'Только новостройки' },
+      { name: 'Агентства', description: 'Риелторские компании', approach: 'Полный сервис', overlap: 'Сделки', differentiation: 'Высокие комиссии' }
+    ]
+  },
+  // === TRAVEL ===
+  {
+    id: 'travel',
+    name: 'Туризм / Бронирование путешествий',
+    keywords: ['туризм', 'travel', 'отель', 'hotel', 'брон', 'booking', 'путёвок', 'тур', 'отдых', 'билет', 'авиа', 'самолёт', 'поезд'],
+    marketSize: '$800 млрд глобально',
+    trends: ['Bleisure', 'Экотуризм', 'AI-планирование', 'Мультимодальные поездки'],
+    barriers: ['Сезонность', 'Регулирование', 'Пандемия'],
+    positioning: 'платформа для планирования путешествий',
+    directCompetitors: [
+      {
+        name: 'Ozon Travel',
+        url: 'https://www.ozon.ru/travel',
+        country: 'Россия',
+        description: 'Бронирование авиа и отелей',
+        features: 'Авиабилеты, отели, туры',
+        pricing: 'Комиссия',
+        targetAudience: 'Путешественники',
+        strengths: ['Экосистема Ozon', 'Ozon Банк', 'Кэшбэк'],
+        weaknesses: ['Меньше выбора отелей'],
+        opportunities: ['Туры', 'Визы'],
+        threats: ['Яндекс.Путешествия', 'Aviasales'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Яндекс.Путешествия',
+        url: 'https://travel.yandex.ru',
+        country: 'Россия',
+        description: 'Бронирование отелей и билетов',
+        features: 'Отели, авиабилеты, туры, Плюс',
+        pricing: 'Комиссия + подписка',
+        targetAudience: 'Пользователи Яндекса',
+        strengths: ['Экосистема', 'Плюс', 'Бренд'],
+        weaknesses: ['Меньше зарубежных отелей'],
+        opportunities: ['AI-планирование', 'Туры'],
+        threats: ['Ozon Travel', 'Aviasales'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Aviasales',
+        url: 'https://aviasales.ru',
+        country: 'Россия',
+        description: 'Поиск авиабилетов',
+        features: 'Авиабилеты, отели, подписки',
+        pricing: 'Комиссия',
+        targetAudience: 'Опытные путешественники',
+        strengths: ['Цены', 'Фильтры', 'Бренд', 'Бот'],
+        weaknesses: ['Только билеты основной продукт'],
+        opportunities: ['Отели', 'Туры'],
+        threats: ['Яндекс', 'Ozon'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Туроператоры', description: 'Турфирмы', approach: 'Готовые туры', overlap: 'Организация поездок', differentiation: 'Меньше гибкости' },
+      { name: 'Прямое бронирование', description: 'Сайты отелей/авиакомпаний', approach: 'Напрямую', overlap: 'Бронирование', differentiation: 'Сложно сравнивать' },
+      { name: 'Турагенты', description: 'Частные агенты', approach: 'Персональный подбор', overlap: 'Планирование', differentiation: 'Комиссия, ограниченный доступ' }
+    ]
+  },
+  // === TAXI ===
+  {
+    id: 'taxi',
+    name: 'Такси / Транспорт',
+    keywords: ['такси', 'taxi', 'каршер', 'carsharing', 'водитель', 'driver', 'пассажир', 'поездк', 'маршрут', 'убер', 'яндекс го'],
+    marketSize: '$150 млрд глобально',
+    trends: ['Электро-такси', 'Автономное вождение', 'Мультимодальность', 'Подписки'],
+    barriers: ['Регулирование', 'Стоимость водителей', 'Безопасность'],
+    positioning: 'сервис такси и перевозок',
+    directCompetitors: [
+      {
+        name: 'Яндекс Go',
+        url: 'https://go.yandex',
+        country: 'Россия',
+        description: 'Лидер такси и доставки',
+        features: 'Такси, еда, доставка, каршеринг',
+        pricing: 'Динамическое ценообразование',
+        targetAudience: 'Городские жители',
+        strengths: ['Экосистема', 'Технологии', 'Охват', 'Плюс'],
+        weaknesses: ['Пиковые цены', 'Качество водителей'],
+        opportunities: ['Беспилотники', 'Подписки'],
+        threats: ['Uber', 'Такси-парки'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Uber',
+        url: 'https://uber.com',
+        country: 'США',
+        description: 'Мировой лидер такси',
+        features: 'Такси, еда, грузоперевозки',
+        pricing: 'Динамическое ценообразование',
+        targetAudience: 'Массовый рынок',
+        strengths: ['Бренд', 'Технологии', 'Охват'],
+        weaknesses: ['Нет в РФ', 'Проблемы с безопасностью'],
+        opportunities: ['Новые рынки', 'Беспилотники'],
+        threats: ['Локальные конкуренты', 'Регулирование'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Ситимобил',
+        url: 'https://citymobil.ru',
+        country: 'Россия',
+        description: 'Российский сервис такси',
+        features: 'Такси, бизнес-класс, доставка',
+        pricing: 'Конкурентные цены',
+        targetAudience: 'Массовый рынок РФ',
+        strengths: ['Цена', 'Бизнес-класс', 'Локализация'],
+        weaknesses: ['Меньше охват', 'Меньше функций'],
+        opportunities: ['Расширение', 'Интеграции'],
+        threats: ['Яндекс Go', 'Uber (если вернётся)'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Общественный транспорт', description: 'Метро, автобусы', approach: 'Массовые перевозки', overlap: 'Транспорт', differentiation: 'Фиксированные маршруты' },
+      { name: 'Каршеринг', description: 'BelkaCar, Делимобиль', approach: 'Краткосрочная аренда', overlap: 'Мобильность', differentiation: 'Самостоятельное вождение' },
+      { name: 'Личный автомобиль', description: 'Собственная машина', approach: 'Личный транспорт', overlap: 'Перемещение', differentiation: 'Парковка, обслуживание' }
+    ]
+  },
+  // === SOCIAL NETWORK ===
+  {
+    id: 'social_network',
+    name: 'Социальная сеть / Платформа',
+    keywords: ['социальн сет', 'social network', 'сообществ', 'community', 'пост', 'feed', 'лайк', 'подписчик', 'профиль', 'vk', 'вконтакте'],
+    marketSize: '$200 млрд глобально',
+    trends: ['Короткие видео', 'AI-рекомендации', 'Закрытые сообщества', 'Монетизация контента'],
+    barriers: ['Сетевой эффект', 'Модерация', 'Конкуренция'],
+    positioning: 'социальная платформа',
+    directCompetitors: [
+      {
+        name: 'VK ВКонтакте',
+        url: 'https://vk.com',
+        country: 'Россия',
+        description: 'Крупнейшая соцсеть РФ',
+        features: 'Новости, сообщения, сообщества, видео, музыка',
+        pricing: 'Бесплатно + реклама',
+        targetAudience: 'Массовый рынок РФ',
+        strengths: ['Охват', 'Функции', 'Музыка', 'Локализация'],
+        weaknesses: ['Дизайн', 'Модерация'],
+        opportunities: ['Короткие видео', 'Монетизация'],
+        threats: ['Telegram', 'YouTube'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Telegram',
+        url: 'https://telegram.org',
+        country: 'Интернациональный',
+        description: 'Мессенджер с социальными функциями',
+        features: 'Каналы, чаты, группы, истории',
+        pricing: 'Бесплатно',
+        targetAudience: 'Цифровое поколение',
+        strengths: ['Скорость', 'Приватность', 'API', 'Боты'],
+        weaknesses: ['Нет ленты рекомендаций'],
+        opportunities: ['Монетизация', 'Stories'],
+        threats: ['VK', 'WhatsApp'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'YouTube',
+        url: 'https://youtube.com',
+        country: 'США',
+        description: 'Видеоплатформа с социальными функциями',
+        features: 'Видео, Shorts, комментарии, подписки',
+        pricing: 'Бесплатно + Premium',
+        targetAudience: 'Массовый рынок',
+        strengths: ['Контент', 'Монетизация', 'Бренд'],
+        weaknesses: ['Комментарии', 'Реклама'],
+        opportunities: ['Shorts', 'Live'],
+        threats: ['TikTok', 'VK Видео'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Офлайн-сообщества', description: 'Клубы по интересам', approach: 'Личные встречи', overlap: 'Социальность', differentiation: 'Локальность, ограниченный охват' },
+      { name: 'Мессенджеры', description: 'WhatsApp, Viber', approach: 'Приватное общение', overlap: 'Коммуникация', differentiation: 'Нет публичного контента' },
+      { name: 'Блог-платформы', description: 'Дзен, Habr', approach: 'Длинный контент', overlap: 'Публикации', differentiation: 'Только статьи' }
+    ]
+  },
+  // === DATING ===
+  {
+    id: 'dating',
+    name: 'Дейтинг / Знакомства',
+    keywords: ['дейтинг', 'dating', 'знакомств', 'свидан', 'пара', 'отношен', 'match', 'tinder', 'mamba', 'любов'],
+    marketSize: '$10 млрд глобально',
+    trends: ['Video dating', 'AI-матчинг', 'Нишевые приложения', 'Безопасность'],
+    barriers: ['Доверие', 'Баланс полов', 'Монетизация'],
+    positioning: 'платформа знакомств',
+    directCompetitors: [
+      {
+        name: 'Mamba',
+        url: 'https://mamba.ru',
+        country: 'Россия',
+        description: 'Популярный сервис знакомств',
+        features: 'Поиск, мэтчинг, чат, видео',
+        pricing: 'Бесплатно + VIP',
+        targetAudience: 'Массовый рынок РФ',
+        strengths: ['База', 'Функции', 'Бренд'],
+        weaknesses: ['Фейки', 'Много рекламы'],
+        opportunities: ['Video', 'AI'],
+        threats: ['Twinby', 'Tinder (возврат)'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Twinby',
+        url: 'https://twinby.ru',
+        country: 'Россия',
+        description: 'Дейтинг с AI-мэтчингом',
+        features: 'AI-подбор, психологический тест',
+        pricing: 'Подписка',
+        targetAudience: 'Ищущие серьёзные отношения',
+        strengths: ['AI', 'Качество', 'Тест'],
+        weaknesses: ['Меньше база', 'Платное'],
+        opportunities: ['Развитие AI', 'Маркетинг'],
+        threats: ['Mamba', 'Тиндер (если вернётся)'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Pure',
+        url: 'https://pure.dating',
+        country: 'Интернациональный',
+        description: 'Дейтинг для мгновенных встреч',
+        features: 'Анонимность, геолокация, временные чаты',
+        pricing: 'Подписка',
+        targetAudience: 'Взрослые, раскрепощённые',
+        strengths: ['Анонимность', 'Дизайн', 'Концепция'],
+        weaknesses: ['Ниша', 'Платное'],
+        opportunities: ['Расширение аудитории'],
+        threats: ['Tinder', 'Mamba'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Социальные сети', description: 'VK, Instagram', approach: 'Знакомства через контент', overlap: 'Поиск партнёра', differentiation: 'Не специализированы' },
+      { name: 'Офлайн', description: 'Бары, клубы, мероприятия', approach: 'Личные встречи', overlap: 'Знакомства', differentiation: 'Случайность, ограниченность' },
+      { name: 'Сайты знакомств', description: 'Веб-версии', approach: 'Поиск по анкетам', overlap: 'Знакомства', differentiation: 'Устаревший интерфейс' }
+    ]
+  },
+  // === FITNESS ===
+  {
+    id: 'fitness',
+    name: 'Фитнес / Здоровый образ жизни',
+    keywords: ['фитнес', 'fitness', 'тренировк', 'workout', 'спорт', 'sport', 'зал', 'gym', 'упражнен', 'йог', 'бег'],
+    marketSize: '$100 млрд глобально',
+    trends: ['Home workout', 'AI-тренеры', 'Wearables', 'Геймификация'],
+    barriers: ['Мотивация', 'Привычки', 'Конкуренция'],
+    positioning: 'фитнес-приложение',
+    directCompetitors: [
+      {
+        name: 'Яндекс Спорт',
+        url: 'https://sport.yandex.ru',
+        country: 'Россия',
+        description: 'Фитнес-трекер от Яндекса',
+        features: 'Тренировки, трекинг, статистика',
+        pricing: 'Бесплатно + Плюс',
+        targetAudience: 'Любители спорта',
+        strengths: ['Экосистема', 'Бесплатно', 'Интеграции'],
+        weaknesses: ['Меньше программ'],
+        opportunities: ['AI-тренер', 'Видео'],
+        threats: ['Зарубежные приложения'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Fitbit',
+        url: 'https://fitbit.com',
+        country: 'США',
+        description: 'Фитнес-трекер с устройствами',
+        features: 'Трекер, тренировки, питание, сон',
+        pricing: 'Бесплатно + Premium',
+        targetAudience: 'Любители фитнеса',
+        strengths: ['Экосистема', 'Устройства', 'Данные'],
+        weaknesses: ['Цена устройств', 'Премиум'],
+        opportunities: ['AI', 'Здоровье'],
+        threats: ['Apple Health', 'Samsung Health'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Nike Training Club',
+        url: 'https://nike.com/ntc-app',
+        country: 'США',
+        description: 'Бесплатные тренировки от Nike',
+        features: 'Видео-тренировки, программы',
+        pricing: 'Бесплатно',
+        targetAudience: 'Любители фитнеса',
+        strengths: ['Бесплатно', 'Качество', 'Бренд'],
+        weaknesses: ['Нет трекинга сна/питания'],
+        opportunities: ['AI', 'Персонализация'],
+        threats: ['Apple Fitness+', 'YouTube'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Фитнес-клубы', description: 'Офлайн-залы', approach: 'Тренеры, оборудование', overlap: 'Тренировки', differentiation: 'Требуется посещение, дороже' },
+      { name: 'YouTube', description: 'Видео-тренировки', approach: 'Бесплатный контент', overlap: 'Тренировки', differentiation: 'Нет персонализации' },
+      { name: 'Персональные тренеры', description: 'Частные специалисты', approach: 'Индивидуальный подход', overlap: 'Тренировки', differentiation: 'Дорого, ограниченное время' }
+    ]
+  },
+  // === AUTO ===
+  {
+    id: 'auto',
+    name: 'Авто / Транспортные услуги',
+    keywords: ['авто', 'auto', 'автомобил', 'car', 'машин', 'сервис', 'сто', 'ремонт', 'запчаст', 'шин', 'автосервис', 'мойк'],
+    marketSize: '$400 млрд глобально',
+    trends: ['Электроавто', 'Подписки на авто', 'Digital сервис', 'Беспилотники'],
+    barriers: ['Доверие', 'Сложность услуг', 'Конкуренция'],
+    positioning: 'автосервис и автотовары',
+    directCompetitors: [
+      {
+        name: 'Авто.ру',
+        url: 'https://auto.ru',
+        country: 'Россия',
+        description: 'Платформа для автовладельцев',
+        features: 'Продажа авто, запчасти, сервисы',
+        pricing: 'Платные объявления',
+        targetAudience: 'Автовладельцы',
+        strengths: ['Бренд', 'База', 'Инструменты'],
+        weaknesses: ['Много перекупов'],
+        opportunities: ['Сервисы', 'Финансы'],
+        threats: ['Авито Авто', 'Drom'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Авито Авто',
+        url: 'https://avito.ru/transport',
+        country: 'Россия',
+        description: 'Раздел авто на Авито',
+        features: 'Продажа авто, запчасти, услуги',
+        pricing: 'Бесплатные и платные объявления',
+        targetAudience: 'Частные лица, дилеры',
+        strengths: ['Трафик', 'Бесплатно', 'Охват'],
+        weaknesses: ['Качество объявлений', 'Мошенники'],
+        opportunities: ['Верификация', 'Услуги'],
+        threats: ['Авто.ру', 'Drom'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐'
+      },
+      {
+        name: 'Drom.ru',
+        url: 'https://drom.ru',
+        country: 'Россия',
+        description: 'Автомобильный портал',
+        features: 'Продажа авто, отзывы, каталог',
+        pricing: 'Платные объявления',
+        targetAudience: 'Автовладельцы Дальнего Востока',
+        strengths: ['Японские авто', 'Регион', 'Отзывы'],
+        weaknesses: ['Региональность', 'Меньше охват'],
+        opportunities: ['Расширение', 'Сервисы'],
+        threats: ['Авто.ру', 'Авито'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Дилеры', description: 'Официальные дилерские центры', approach: 'Продажа и сервис', overlap: 'Автоуслуги', differentiation: 'Дорого, только новые авто' },
+      { name: 'Независимые СТО', description: 'Частные автосервисы', approach: 'Ремонт и обслуживание', overlap: 'Ремонт', differentiation: 'Нет онлайн-записи' },
+      { name: 'Рынки запчастей', description: 'Офлайн-магазины', approach: 'Продажа запчастей', overlap: 'Запчасти', differentiation: 'Нет доставки, ограниченный выбор' }
+    ]
+  },
+  // === LEGAL ===
+  {
+    id: 'legal',
+    name: 'Юридические услуги / Право',
+    keywords: ['юрист', 'legal', 'прав', 'law', 'адвокат', 'договор', 'суд', 'иск', 'юридическ', 'консульт'],
+    marketSize: '$900 млрд глобально',
+    trends: ['LegalTech', 'AI-договоры', 'Онлайн-споры', 'Self-service'],
+    barriers: ['Регулирование', 'Доверие', 'Сложность'],
+    positioning: 'юридическая платформа',
+    directCompetitors: [
+      {
+        name: 'Правовед.ru',
+        url: 'https://pravoved.ru',
+        country: 'Россия',
+        description: 'Онлайн-консультации юристов',
+        features: 'Консультации, документы, чат',
+        pricing: 'от 100₽ за вопрос',
+        targetAudience: 'Физлица, малый бизнес',
+        strengths: ['Доступность', 'Цена', 'Онлайн'],
+        weaknesses: ['Качество ответов', 'Ограниченный функционал'],
+        opportunities: ['AI', 'Документы'],
+        threats: ['9111.ru', 'Автоюристы'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: '9111.ru',
+        url: 'https://9111.ru',
+        country: 'Россия',
+        description: 'Юридический портал',
+        features: 'Вопросы, статьи, юристы',
+        pricing: 'Бесплатно + платные услуги',
+        targetAudience: 'Физлица',
+        strengths: ['Бесплатно', 'База знаний', 'Охват'],
+        weaknesses: ['Качество ответов', 'Интерфейс'],
+        opportunities: ['Документы', 'AI'],
+        threats: ['Правовед', 'Юридические фирмы'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Doczilla',
+        url: 'https://doczilla.ai',
+        country: 'Россия',
+        description: 'AI-генерация документов',
+        features: 'Автогенерация договоров, проверка',
+        pricing: 'Подписка',
+        targetAudience: 'Бизнес, юристы',
+        strengths: ['AI', 'Скорость', 'Автоматизация'],
+        weaknesses: ['Новый продукт', 'Ограниченные шаблоны'],
+        opportunities: ['Расширение базы', 'Интеграции'],
+        threats: ['Традиционные юристы', 'Конкуренты'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Юридические фирмы', description: 'Традиционные адвокатские конторы', approach: 'Полный сервис', overlap: 'Юридические услуги', differentiation: 'Дорого, офлайн' },
+      { name: 'Госуслуги', description: 'Онлайн-госсервисы', approach: 'Государственные услуги', overlap: 'Документы', differentiation: 'Только гос. услуги' },
+      { name: 'Шаблоны документов', description: 'Бесплатные шаблоны', approach: 'Самостоятельное заполнение', overlap: 'Документы', differentiation: 'Нет проверки юристом' }
+    ]
+  },
+  // === FASHION ===
+  {
+    id: 'fashion',
+    name: 'Мода / Одежда',
+    keywords: ['одежд', 'fashion', 'мод', 'shop', 'плать', 'брюк', 'куртк', 'обув', 'сумк', 'lamo', 'lamoda', 'wildberri'],
+    marketSize: '$2 трлн глобально',
+    trends: ['Sustainable fashion', 'AR-примерки', 'Resale', 'AI-рекомендации'],
+    barriers: ['Возвраты', 'Логистика', 'Размеры'],
+    positioning: 'магазин модной одежды',
+    directCompetitors: [
+      {
+        name: 'Lamoda',
+        url: 'https://lamoda.ru',
+        country: 'Россия',
+        description: 'Магазин одежды и обуви',
+        features: 'Каталог, примерка, доставка, возврат',
+        pricing: 'Розничные цены',
+        targetAudience: 'Любители моды',
+        strengths: ['Сервис', 'Примерка', 'Бренды', 'Доставка'],
+        weaknesses: ['Цены', 'Возвраты'],
+        opportunities: ['AR-примерка', 'AI'],
+        threats: ['Wildberries', 'Ozon'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Wildberries',
+        url: 'https://wildberries.ru',
+        country: 'Россия',
+        description: 'Маркетплейс с одеждой',
+        features: 'Огромный каталог, доставка, отзывы',
+        pricing: 'Конкурентные цены',
+        targetAudience: 'Массовый покупатель',
+        strengths: ['Цены', 'Охват', 'Скорость'],
+        weaknesses: ['Качество', 'Размеры'],
+        opportunities: ['Премиум', 'Бренды'],
+        threats: ['Lamoda', 'Ozon'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐'
+      },
+      {
+        name: 'Брендовые магазины',
+        url: 'https://example.com',
+        country: 'Интернациональный',
+        description: 'Официальные магазины брендов',
+        features: 'Оригинальные товары, гарантия',
+        pricing: 'Премиум цены',
+        targetAudience: 'Любители брендов',
+        strengths: ['Аутентичность', 'Сервис', 'Новинки'],
+        weaknesses: ['Цена', 'Ограниченный выбор'],
+        opportunities: ['Онлайн', 'AR'],
+        threats: ['Маркетплейсы', 'Resale'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Офлайн-магазины', description: 'Торговые центры', approach: 'Примерка на месте', overlap: 'Покупка одежды', differentiation: 'Ограниченный выбор, время на поездку' },
+      { name: 'Resale-платформы', description: 'Авито, Юла', approach: 'Б/у одежда', overlap: 'Одежда', differentiation: 'Б/у, нет гарантий' },
+      { name: 'Швеи/ателье', description: 'Индивидуальный пошив', approach: 'Пошив на заказ', overlap: 'Одежда', differentiation: 'Дорого, долго' }
+    ]
+  },
+  // === PETS (GENERAL) ===
+  {
+    id: 'pets',
+    name: 'Зоотовары / Питомцы',
+    keywords: ['зоо', 'pet', 'питом', 'собак', 'cat', 'кот', 'корм', 'животн', 'ветеринар', 'зоомагаз'],
+    marketSize: '$300 млрд глобально',
+    trends: ['Премиум-корма', 'Telemed для животных', 'Smart-устройства', 'Персонализация'],
+    barriers: ['Логистика живого товара', 'Доверие', 'Регулирование'],
+    positioning: 'зоомагазин и услуги для животных',
+    directCompetitors: [
+      {
+        name: 'Зоопрайс',
+        url: 'https://zooprice.ru',
+        country: 'Россия',
+        description: 'Агрегатор зоотоваров',
+        features: 'Сравнение цен, каталог, доставка',
+        pricing: 'Бесплатно для покупателей',
+        targetAudience: 'Владельцы животных',
+        strengths: ['Сравнение', 'Цены', 'Охват'],
+        weaknesses: ['Нет своих складов'],
+        opportunities: ['Интеграции', 'AI'],
+        threats: ['Маркетплейсы', 'Зоомагазины'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Четыре лапы',
+        url: 'https://4lapy.ru',
+        country: 'Россия',
+        description: 'Сеть зоомагазинов',
+        features: 'Офлайн-магазины, доставка, корма',
+        pricing: 'Средние цены',
+        targetAudience: 'Владельцы животных',
+        strengths: ['Офлайн-присутствие', 'Ассортимент', 'Сервис'],
+        weaknesses: ['Цены выше онлайн'],
+        opportunities: ['Онлайн', 'Подписки'],
+        threats: ['Маркетплейсы', 'Онлайн-конкуренты'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Маркетплейсы',
+        url: 'https://ozon.ru',
+        country: 'Россия',
+        description: 'Ozon/WB с зоотоварами',
+        features: 'Огромный выбор, доставка',
+        pricing: 'Конкурентные цены',
+        targetAudience: 'Массовый покупатель',
+        strengths: ['Цены', 'Охват', 'Доставка'],
+        weaknesses: ['Нет консультаций', 'Нет живого'],
+        opportunities: ['Расширение', 'Услуги'],
+        threats: ['Специализированные магазины'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Ветеринарные клиники', description: 'Лечение животных', approach: 'Медицинские услуги', overlap: 'Здоровье животных', differentiation: 'Нет магазина' },
+      { name: 'Приюты', description: 'Центры усыновления', approach: 'Поиск питомца', overlap: 'Животные', differentiation: 'Нет продажи товаров' },
+      { name: 'Частные заводчики', description: 'Питомники', approach: 'Продажа породистых животных', overlap: 'Животные', differentiation: 'Только продажа, нет товаров' }
+    ]
+  },
+  // === CONSTRUCTION ===
+  {
+    id: 'construction',
+    name: 'Строительство / Ремонт',
+    keywords: ['строительств', 'construction', 'ремонт', 'repair', 'материал', 'инструмент', 'стройматериал', 'leroy', 'petrovich', 'ob'],
+    marketSize: '$12 трлн глобально',
+    trends: ['Smart home', 'Устойчивое строительство', '3D-печать', 'Модульные дома'],
+    barriers: ['Стоимость', 'Регулирование', 'Сезонность'],
+    positioning: 'магазин стройматериалов',
+    directCompetitors: [
+      {
+        name: 'Leroy Merlin',
+        url: 'https://leroymerlin.ru',
+        country: 'Франция',
+        description: 'Сеть магазинов DIY',
+        features: 'Огромный каталог, сервисы, доставка',
+        pricing: 'Конкурентные цены',
+        targetAudience: 'DIY, строители',
+        strengths: ['Ассортимент', 'Сервис', 'Бренд'],
+        weaknesses: ['Большие магазины', 'Очереди'],
+        opportunities: ['Онлайн', 'Smart home'],
+        threats: ['Петрович', 'Ozon'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Петрович',
+        url: 'https://petrovich.ru',
+        country: 'Россия',
+        description: 'Сеть стройматериалов',
+        features: 'Каталог, доставка, услуги',
+        pricing: 'Конкурентные цены',
+        targetAudience: 'Строители, ремонт',
+        strengths: ['Сервис', 'Доставка', 'B2B'],
+        weaknesses: ['Меньше магазинов'],
+        opportunities: ['Онлайн', 'Расширение'],
+        threats: ['Leroy Merlin', 'Ozon'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Ozon Строительство',
+        url: 'https://ozon.ru',
+        country: 'Россия',
+        description: 'Раздел стройматериалов на Ozon',
+        features: 'Огромный выбор, доставка',
+        pricing: 'Конкурентные цены',
+        targetAudience: 'DIY, строители',
+        strengths: ['Цены', 'Охват', 'Доставка'],
+        weaknesses: ['Нет услуг', 'Нет консультаций'],
+        opportunities: ['B2B', 'Услуги'],
+        threats: ['Leroy Merlin', 'Петрович'],
+        functionalityScore: '⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirectCompetitors: [
+      { name: 'Строительные компании', description: 'Генподрядчики', approach: 'Полный цикл работ', overlap: 'Строительство', differentiation: 'Дорого, только услуги' },
+      { name: 'Локальные рынки', description: 'Строительные рынки', approach: 'Офлайн-покупки', overlap: 'Материалы', differentiation: 'Ограниченный выбор, нет доставки' },
+      { name: 'Частные мастера', description: 'Ремонтные бригады', approach: 'Ремонт под ключ', overlap: 'Ремонт', differentiation: 'Только работы, нет материалов' }
+    ]
+  }
+];
+
+// Функция определения отрасли по контексту
+function detectIndustry(context: string): IndustryData | null {
+  const lowerContext = context.toLowerCase();
+  let bestMatch: IndustryData | null = null;
+  let bestScore = 0;
+
+  for (const industry of INDUSTRIES_DATABASE) {
+    let score = 0;
+    for (const keyword of industry.keywords) {
+      if (lowerContext.includes(keyword.toLowerCase())) {
+        score += keyword.length; // Более длинные ключевые слова важнее
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = industry;
+    }
+  }
+
+  return bestScore > 0 ? bestMatch : null;
+}
+
+// База знаний о типах продуктов и их конкурентах
+const PRODUCT_TYPES: ProductType[] = [
+  {
+    id: 'ats',
+    name: 'Виртуальная АТС / Телефония',
+    keywords: ['атс', 'ats', 'телефон', 'звонок', 'call', 'ivr', 'голосовой', 'автоответчик', 'колл-центр', 'sip'],
+    marketSize: '$15 млрд глобально, $500 млн в РФ (2024)',
+    trends: ['Переход на облачные решения', 'Интеграция с CRM', 'AI-ассистенты для звонков', 'Омниканальность'],
+    barriers: ['Интеграция с существующей инфраструктурой', 'Надёжность связи', 'Соблюдение законодательства'],
+    positioning: 'современное решение для бизнеса с гибкими интеграциями'
+  },
+  {
+    id: 'dashboard',
+    name: 'Бизнес-дашборд / Аналитика',
+    keywords: ['дашборд', 'dashboard', 'аналитик', 'метрик', 'отчёт', 'report', 'kpi', 'график', 'chart', 'bi-систем'],
+    marketSize: '$25 млрд глобально (BI-рынок)',
+    trends: ['Self-service аналитика', 'Real-time данные', 'AI-инсайты', 'Мобильные дашборды'],
+    barriers: ['Качество данных', 'Сложность внедрения', 'Обучение пользователей'],
+    positioning: 'интуитивный инструмент для принятия решений'
+  },
+  {
+    id: 'crm',
+    name: 'CRM-система',
+    keywords: ['crm', 'клиент', 'customer', 'продаж', 'sales', 'лид', 'lead', 'сделк', 'deal'],
+    marketSize: '$80 млрд глобально',
+    trends: ['AI-прогнозирование продаж', 'Автоматизация процессов', 'Интеграция с мессенджерами'],
+    barriers: ['Сопротивление сотрудников', 'Миграция данных', 'Сложность настройки'],
+    positioning: 'простая CRM для малого и среднего бизнеса'
+  },
+  {
+    id: 'ecommerce',
+    name: 'E-commerce / Интернет-магазин',
+    keywords: ['магазин', 'shop', 'ecommerce', 'торгов', 'заказ', 'order', 'корзин', 'cart', 'товар', 'product'],
+    marketSize: '$6 трлн глобально',
+    trends: ['Маркетплейсы', 'Social commerce', 'Персонализация', 'Быстрая доставка'],
+    barriers: ['Логистика', 'Конкуренция', 'Обработка платежей'],
+    positioning: 'современная платформа электронной коммерции'
+  },
+  {
+    id: 'messenger',
+    name: 'Мессенджер / Чат-приложение',
+    keywords: ['мессендж', 'messenger', 'чат', 'chat', 'сообщен', 'message', 'диалог'],
+    marketSize: '$100 млрд+ глобально',
+    trends: ['Шифрование', 'Боты и AI', 'Интеграции', 'Бизнес-функции'],
+    barriers: ['Сетевой эффект', 'Привычки пользователей', 'Регулирование'],
+    positioning: 'безопасный мессенджер для бизнеса и частного общения'
+  },
+  {
+    id: 'task',
+    name: 'Управление задачами / Проектами',
+    keywords: ['задач', 'task', 'проект', 'project', 'kanban', 'trello', 'agile', 'scrumban'],
+    marketSize: '$5 млрд глобально',
+    trends: ['AI-планирование', 'Асинхронная работа', 'Интеграции', 'Геймификация'],
+    barriers: ['Привычки команды', 'Сложность перехода', 'Обучение'],
+    positioning: 'простой инструмент для командной работы'
+  },
+  {
+    id: 'hr',
+    name: 'HR-платформа / Управление персоналом',
+    keywords: ['hr', 'кадр', 'персонал', 'сотрудник', 'employee', 'рекрут', 'найм', 'onboard'],
+    marketSize: '$30 млрд глобально',
+    trends: ['Remote work инструменты', 'AI-рекрутинг', 'Wellness программы', 'Аналитика персонала'],
+    barriers: ['Защита персональных данных', 'Интеграция с существующими системами', 'Принятие HR'],
+    positioning: 'современная платформа управления талантами'
+  },
+  {
+    id: 'fintech',
+    name: 'FinTech / Финансовое приложение',
+    keywords: ['фин', 'fin', 'банк', 'bank', 'платёж', 'payment', 'деньги', 'money', 'бухгалт', 'account'],
+    marketSize: '$300 млрд глобально',
+    trends: ['Neobanking', 'Криптовалюты', 'BNPL', 'Открытые API'],
+    barriers: ['Регулирование', 'Безопасность', 'Доверие пользователей'],
+    positioning: 'финансовый инструмент для цифрового поколения'
+  },
+  {
+    id: 'education',
+    name: 'EdTech / Образовательная платформа',
+    keywords: ['образован', 'education', 'курс', 'course', 'обучен', 'learning', 'студент', 'student'],
+    marketSize: '$400 млрд глобально',
+    trends: ['Microlearning', 'AI-персонализация', 'VR/AR', 'Геймификация'],
+    barriers: ['Качество контента', 'Мотивация студентов', 'Аккредитация'],
+    positioning: 'интерактивная платформа онлайн-обучения'
+  },
+  {
+    id: 'health',
+    name: 'HealthTech / Медицинское приложение',
+    keywords: ['медицин', 'health', 'врач', 'doctor', 'здоров', 'health', 'клиник', 'clinic', 'пациент'],
+    marketSize: '$500 млрд глобально',
+    trends: ['Telemedicine', 'AI-диагностика', 'Wearables', 'Персонализированная медицина'],
+    barriers: ['Регулирование', 'Защита данных', 'Принятие врачами'],
+    positioning: 'цифровой помощник для здоровья'
+  },
+  {
+    id: 'logistics',
+    name: 'Логистика / Доставка',
+    keywords: ['логистик', 'logistics', 'доставк', 'delivery', 'склад', 'warehouse', 'транспор', 'transport'],
+    marketSize: '$200 млрд глобально',
+    trends: ['Автономная доставка', 'Real-time трекинг', 'Оптимизация маршрутов AI', 'Устойчивость'],
+    barriers: ['Инфраструктура', 'Регулирование', 'Стоимость'],
+    positioning: 'умная платформа логистики'
+  },
+  {
+    id: 'booking',
+    name: 'Онлайн-запись / Бронирование',
+    keywords: ['запись', 'брон', 'календар', 'слот', 'приём', 'расписание', 'записаться', 'онлайн-запись', 'yclients', 'dikidi', 'салон', 'мастер', 'клиник', 'красот', 'услуг'],
+    marketSize: '$2 млрд глобально (online booking)',
+    trends: ['Интеграция с мессенджерами', 'Автоматические напоминания', 'AI-подбор времени', 'Виджеты для сайтов'],
+    barriers: ['Привычка записываться по телефону', 'Интеграция с календарями', 'Стоимость SMS'],
+    positioning: 'простой сервис онлайн-записи для бизнеса'
+  },
+  {
+    id: 'salon',
+    name: 'Салон связи / Точка продаж оператора',
+    keywords: ['салон связи', 'сим-карт', 'симкарт', 'оператор', 'мобильн', 'телфон', 'связь', 'тариф', 'мтс', 'билайн', 'мегафон', 'теле2', 'yota', 'абонент', 'номер', 'пополнить'],
+    marketSize: '$10 млрд рынок мобильной связи в РФ',
+    trends: ['ESIM', 'Виртуальные операторы', 'Бандлы услуг', 'Цифровые сервисы'],
+    barriers: ['Лицензирование', 'Инфраструктура', 'Конкуренция с федеральными сетями'],
+    positioning: 'современный салон связи с цифровым сервисом'
+  },
+  {
+    id: 'saas',
+    name: 'SaaS-платформа / Облачный сервис',
+    keywords: ['saas', 'облачн', 'подписк', 'subscription', 'api', 'интеграц', 'b2b', 'автоматизац', 'workflow', 'платформ'],
+    marketSize: '$200 млрд глобально',
+    trends: ['AI-функции', 'No-code/Low-code', 'Интеграции', 'Микросервисы'],
+    barriers: ['Привычки пользователей', 'Безопасность данных', 'Миграция'],
+    positioning: 'современная SaaS-платформа для бизнеса'
+  }
+];
+
+// База конкурентов по типам продуктов
+const COMPETITORS_DB: Record<string, { direct: Competitor[]; indirect: IndirectCompetitor[] }> = {
+  booking: {
+    direct: [
+      {
+        name: 'YCLIENTS',
+        url: 'https://yclients.ru',
+        country: 'Россия',
+        description: 'Лидер рынка онлайн-записи для салонов красоты и медицины',
+        features: 'Онлайн-запись, CRM, склад, бухгалтерия, виджеты, мессенджеры',
+        pricing: 'от 990₽/мес',
+        targetAudience: 'Салоны красоты, клиники, образовательные центры',
+        strengths: ['Полный функционал', 'Интеграции', 'Бесплатный тариф', 'Мобильное приложение'],
+        weaknesses: ['Сложность интерфейса', 'Цена расширенных функций', 'Перегруженность'],
+        opportunities: ['AI-ассистент', 'Интеграция с маркетплейсами', 'Видео-консультации'],
+        threats: ['Dikidi', 'Нишевые решения', 'Собственные разработки'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Dikidi',
+        url: 'https://dikidi.net',
+        country: 'Россия',
+        description: 'Простой сервис онлайн-записи с современным интерфейсом',
+        features: 'Онлайн-запись, расписание, уведомления, CRM, виджеты',
+        pricing: 'от 490₽/мес',
+        targetAudience: 'Мастера, маленькие салоны',
+        strengths: ['Простота', 'Дизайн', 'Цена', 'Быстрый старт'],
+        weaknesses: ['Ограниченный функционал', 'Меньше интеграций', 'Нет склада'],
+        opportunities: ['Расширение функций', 'Бизнес-аналитика', 'Галерея работ'],
+        threats: ['YCLIENTS', 'Бесплатные альтернативы'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Sonline',
+        url: 'https://sonline.su',
+        country: 'Россия',
+        description: 'Сервис онлайн-записи для салонов и клиник',
+        features: 'Онлайн-запись, расписание, SMS-уведомления, отчёты',
+        pricing: 'от 290₽/мес',
+        targetAudience: 'Салоны красоты, медицинские центры',
+        strengths: ['Низкая цена', 'Простота', 'SMS включены'],
+        weaknesses: ['Базовый функционал', 'Мало интеграций'],
+        opportunities: ['Интеграции', 'AI-функции', 'Расширение'],
+        threats: ['Крупные конкуренты', 'Ценовая война'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      }
+    ],
+    indirect: [
+      {
+        name: 'WhatsApp / Telegram',
+        description: 'Мессенджеры для записи через личные сообщения',
+        approach: 'Переписка с мастером/салоном',
+        overlap: 'Коммуникация для записи',
+        differentiation: 'Нет автоматизации, календаря, напоминаний'
+      },
+      {
+        name: 'Google Calendar',
+        description: 'Календарь для ручного управления записями',
+        approach: 'Ручное ведение расписания',
+        overlap: 'Управление временем',
+        differentiation: 'Нет клиентской части, онлайн-записи'
+      },
+      {
+        name: 'Телефонная запись',
+        description: 'Традиционный способ записи по телефону',
+        approach: 'Звонок в салон/клинику',
+        overlap: 'Запись на услугу',
+        differentiation: 'Требует времени, нет напоминаний'
+      }
+    ]
+  },
+  ats: {
+    direct: [
+      {
+        name: 'Манго Офис',
+        url: 'https://mango-office.ru',
+        country: 'Россия',
+        description: 'Облачная АТС с интеграцией CRM и аналитикой звонков',
+        features: 'Виртуальная АТС, интеграция CRM, запись звонков, IVR, аналитика',
+        pricing: 'от 650₽/мес за пользователя',
+        targetAudience: 'Малый и средний бизнес в РФ',
+        strengths: ['Локализация для РФ', 'Интеграция с российскими CRM', 'Техподдержка на русском', 'Работа с российскими операторами'],
+        weaknesses: ['Ограниченный функционал аналитики', 'Устаревший интерфейс', 'Сложность настройки интеграций'],
+        opportunities: ['Расширение AI-функций', 'Мобильное приложение', 'Интеграция с мессенджерами'],
+        threats: ['Выход на рынок зарубежных игроков', 'Снижение цен конкурентами', 'Изменения в законодательстве'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Telphin',
+        url: 'https://telphin.ru',
+        country: 'Россия',
+        description: 'IP-телефония и виртуальная АТС для бизнеса',
+        features: 'Виртуальная АТС, SIP-телефония, интеграция с 1С, запись разговоров',
+        pricing: 'от 290₽/мес',
+        targetAudience: 'Малый бизнес, колл-центры',
+        strengths: ['Низкая цена', 'Простота настройки', 'Интеграция с 1С'],
+        weaknesses: ['Базовый функционал', 'Ограниченная аналитика', 'Старый UI'],
+        opportunities: ['Обновление интерфейса', 'AI-функции', 'Мобильное приложение'],
+        threats: ['Более технологичные конкуренты', 'Ценовая война'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'UIS (Юждес)',
+        url: 'https://uiscom.ru',
+        country: 'Россия',
+        description: 'Облачная контакт-центр и виртуальная АТС',
+        features: 'Виртуальная АТС, контакт-центр, интеграция CRM, аналитика',
+        pricing: 'от 600₽/мес',
+        targetAudience: 'Средний и крупный бизнес',
+        strengths: ['Мощный контакт-центр', 'Глубокая аналитика', 'Интеграции'],
+        weaknesses: ['Сложность для новичков', 'Высокая цена расширенных функций', 'Долгое внедрение'],
+        opportunities: ['SMB-сегмент', 'AI-ассистенты', 'Самостоятельная настройка'],
+        threats: ['Упрощение решений конкурентами', 'Экономический фактор'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirect: [
+      {
+        name: 'Telegram',
+        description: 'Мессенджер с функциями звонков и групповых чатов',
+        approach: 'Бесплатная связь через интернет',
+        overlap: 'Групповые звонки, контакты',
+        differentiation: 'Не бизнес-ориентирован, нет CRM-интеграций'
+      },
+      {
+        name: 'WhatsApp Business',
+        description: 'Бизнес-версия мессенджера для общения с клиентами',
+        approach: 'Чат-коммуникация с клиентами',
+        overlap: 'Клиентское общение',
+        differentiation: 'Только чат, нет телефонии'
+      },
+      {
+        name: 'Skype',
+        description: 'Платформа для видеозвонков и чатов',
+        approach: 'Видеоконференции и звонки',
+        overlap: 'Звонки, конференц-связь',
+        differentiation: 'Устаревший продукт, нет бизнес-функций АТС'
+      }
+    ]
+  },
+  dashboard: {
+    direct: [
+      {
+        name: 'Yandex DataLens',
+        url: 'https://cloud.yandex.ru/services/datalens',
+        country: 'Россия',
+        description: 'Бесплатный BI-сервис для визуализации данных',
+        features: 'Дашборды, визуализации, интеграция с Yandex Cloud, collaborative редактирование',
+        pricing: 'Бесплатно',
+        targetAudience: 'Компании любого размера',
+        strengths: ['Бесплатность', 'Интеграция с Yandex', 'Простота', 'Русский язык'],
+        weaknesses: ['Ограниченная кастомизация', 'Зависимость от Yandex', 'Ограниченные источники данных'],
+        opportunities: ['Расширение источников', 'AI-инсайты', 'Мобильное приложение'],
+        threats: ['Изменение тарифной политики', 'Выход международных игроков'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Grafana',
+        url: 'https://grafana.com',
+        country: 'США',
+        description: 'Open-source платформа для визуализации и мониторинга',
+        features: 'Гибкие дашборды, алертинг, множество плагинов, open source',
+        pricing: 'Open source / Enterprise от $50/мес',
+        targetAudience: 'IT-команды, DevOps',
+        strengths: ['Гибкость', 'Open source', 'Community', 'Plugin ecosystem'],
+        weaknesses: ['Сложность настройки', 'Требует технических знаний', 'Нет русского языка'],
+        opportunities: ['Упрощение для бизнеса', 'SaaS-версия', 'No-code редактор'],
+        threats: ['Cloud-native решения', 'Встроенные дашборды в других продуктах'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐'
+      },
+      {
+        name: 'Tableau',
+        url: 'https://tableau.com',
+        country: 'США',
+        description: 'Лидер рынка BI с мощной визуализацией',
+        features: 'Расширенная визуализация, AI-инсайты, data prep, collaboration',
+        pricing: 'от $15/мес за пользователя',
+        targetAudience: 'Средний и крупный бизнес',
+        strengths: ['Мощный функционал', 'Лидер рынка', 'AI-возможности', 'Интеграции'],
+        weaknesses: ['Высокая цена', 'Сложность обучения', 'Нет локализации'],
+        opportunities: ['SMB-сегмент', 'Локализация', 'Упрощение'],
+        threats: ['Бесплатные альтернативы', 'Российские решения'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirect: [
+      {
+        name: 'Google Sheets',
+        description: 'Табличный процессор с визуализацией',
+        approach: 'Самостоятельное создание отчётов',
+        overlap: 'Визуализация данных, совместная работа',
+        differentiation: 'Нет real-time дашбордов, ограниченная визуализация'
+      },
+      {
+        name: 'Excel / Power BI',
+        description: 'Майкрософт экосистема для работы с данными',
+        approach: 'Интеграция с Office 365',
+        overlap: 'Отчёты, визуализация',
+        differentiation: 'Сложность, цена, привязка к Microsoft'
+      },
+      {
+        name: 'Notion',
+        description: 'All-in-one workspace с базами данных',
+        approach: 'Самостоятельное ведение базы',
+        overlap: 'Структурирование данных',
+        differentiation: 'Нет продвинутой аналитики, дашборды ограничены'
+      }
+    ]
+  },
+  crm: {
+    direct: [
+      {
+        name: 'Битрикс24',
+        url: 'https://bitrix24.ru',
+        country: 'Россия',
+        description: 'Комплексная CRM с функциями управления проектами',
+        features: 'CRM, задачи, коммуникации, сайт, интернет-магазин',
+        pricing: 'Бесплатно до 5 пользователей / от 2490₽/мес',
+        targetAudience: 'Малый и средний бизнес',
+        strengths: ['Бесплатный тариф', 'Всё в одном', 'Локализация', 'Интеграции'],
+        weaknesses: ['Перегруженность', 'Сложность', 'Скорость работы'],
+        opportunities: ['Упрощение интерфейса', 'AI-функции', 'Мобильность'],
+        threats: ['Конкуренция с нишевыми решениями', 'Отток пользователей'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'AmoCRM',
+        url: 'https://amocrm.ru',
+        country: 'Россия',
+        description: 'Простая CRM для управления продажами',
+        features: 'Воронка продаж, интеграции, автоматизация, аналитика',
+        pricing: 'от 799₽/мес',
+        targetAudience: 'Малый бизнес, отделы продаж',
+        strengths: ['Простота', 'Воронка продаж', 'Интуитивность', 'Интеграции'],
+        weaknesses: ['Ограниченный функционал', 'Нет задач/проектов', 'Цена растёт с пользователями'],
+        opportunities: ['Расширение функционала', 'AI-рекомендации', 'Мобильность'],
+        threats: ['Битрикс24', 'Зарубежные решения', 'Ценовая конкуренция'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Salesforce',
+        url: 'https://salesforce.com',
+        country: 'США',
+        description: 'Мировой лидер CRM для крупного бизнеса',
+        features: 'Sales Cloud, Service Cloud, Marketing Cloud, AI Einstein',
+        pricing: 'от $25/мес за пользователя',
+        targetAudience: 'Средний и крупный бизнес',
+        strengths: ['Мощный функционал', 'Экосистема', 'AI', 'Интеграции'],
+        weaknesses: ['Высокая цена', 'Сложность', 'Нет русского языка', 'Санкции'],
+        opportunities: ['Российский рынок', 'SMB сегмент', 'Упрощение'],
+        threats: ['Российские решения', 'Санкции', 'Цена'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      }
+    ],
+    indirect: [
+      {
+        name: 'Google Contacts',
+        description: 'Адресная книга Google',
+        approach: 'Хранение контактов',
+        overlap: 'Хранение контактов',
+        differentiation: 'Нет функций продаж, нет воронки'
+      },
+      {
+        name: 'Trello',
+        description: 'Kanban-доска для управления задачами',
+        approach: 'Визуальное управление',
+        overlap: 'Управление процессами',
+        differentiation: 'Нет CRM-функций, нет продаж'
+      },
+      {
+        name: 'Excel / Google Sheets',
+        description: 'Табличные процессоры',
+        approach: 'Самостоятельное ведение базы клиентов',
+        overlap: 'Хранение данных о клиентах',
+        differentiation: 'Нет автоматизации, нет воронки продаж'
+      }
+    ]
+  }
+};
+
+// Функция определения типа продукта
+function detectProductType(text: string): ProductType {
+  const lowerText = text.toLowerCase();
+  
+  // Ищем наиболее подходящий тип продукта
+  let bestMatch: ProductType | null = null;
+  let bestScore = 0;
+  
+  for (const type of PRODUCT_TYPES) {
+    let score = 0;
+    for (const keyword of type.keywords) {
+      if (lowerText.includes(keyword.toLowerCase())) {
+        score += keyword.length; // Более длинные ключевые слова более специфичны
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = type;
+    }
+  }
+  
+  // Если ничего не найдено, возвращаем тип по умолчанию
+  if (!bestMatch) {
+    return {
+      id: 'default',
+      name: 'Программный продукт / SaaS',
+      keywords: [],
+      marketSize: 'Зависит от конкретной ниши',
+      trends: ['AI-интеграция', 'Облачные решения', 'Мобильность', 'Персонализация'],
+      barriers: ['Конкуренция', 'Привлечение пользователей', 'Монетизация'],
+      positioning: 'современное решение для цифровых потребностей'
+    };
+  }
+  
+  return bestMatch;
+}
+
+// Функция генерации конкурентов - КОНТЕКСТНАЯ с ИСПОЛЬЗОВАНИЕМ БАЗЫ ОТРАСЛЕЙ
+function generateCompetitors(productType: ProductType, idea: { name: string; description: string; functions: string[] }): { direct: Competitor[]; indirect: IndirectCompetitor[] } {
+  console.log('[generateCompetitors] Анализ идеи для подбора конкурентов:', idea.name);
+  
+  // === ПРИОРИТЕТ: ИСПОЛЬЗУЕМ УНИВЕРСАЛЬНУЮ БАЗУ ОТРАСЛЕЙ ===
+  const fullContext = `${idea.name} ${idea.description} ${idea.functions.join(' ')}`;
+  const detectedIndustry = detectIndustry(fullContext);
+  
+  if (detectedIndustry) {
+    console.log(`[generateCompetitors] Найдена отрасль в базе: ${detectedIndustry.name}`);
+    
+    // Преобразуем данные из IndustryData в формат Competitor
+    const directCompetitors: Competitor[] = detectedIndustry.directCompetitors.map(c => ({
+      name: c.name,
+      url: c.url,
+      country: c.country,
+      description: c.description,
+      features: c.features,
+      pricing: c.pricing,
+      targetAudience: c.targetAudience,
+      strengths: c.strengths,
+      weaknesses: c.weaknesses,
+      opportunities: c.opportunities,
+      threats: c.threats,
+      functionalityScore: c.functionalityScore,
+      priceScore: c.priceScore,
+      uxScore: c.uxScore,
+      supportScore: c.supportScore
+    }));
+    
+    const indirectCompetitors: IndirectCompetitor[] = detectedIndustry.indirectCompetitors.map(c => ({
+      name: c.name,
+      description: c.description,
+      approach: c.approach,
+      overlap: c.overlap,
+      differentiation: c.differentiation
+    }));
+    
+    return {
+      direct: directCompetitors,
+      indirect: indirectCompetitors
+    };
+  }
+  
+  // === FALLBACK: ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ ===
+  const lowerDesc = idea.description.toLowerCase();
+  const lowerName = idea.name.toLowerCase();
+
+  // === СПЕЦИФИЧЕСКИЕ НИШЕВЫЕ КОНКУРЕНТЫ ===
+
+  // Аквариумистика
+  if (lowerDesc.includes('аквариум') || lowerDesc.includes('рыб') || lowerName.includes('аква') || lowerDesc.includes('водоросл')) {
+    return {
+      direct: [
+        {
+          name: 'AquaLogo',
+          url: 'https://aqualogo.ru',
+          country: 'Россия',
+          description: 'Крупнейший интернет-магазин аквариумистики в России',
+          features: 'Каталог рыб, растений, оборудования; онлайн-заказ; доставка по РФ',
+          pricing: 'Розничные цены, скидки для постоянных клиентов',
+          targetAudience: 'Аквариумисты-любители и профессионалы',
+          strengths: ['Широкий ассортимент', 'Доставка по РФ', 'Блог и статьи', 'Филиалы в городах'],
+          weaknesses: ['Устаревший дизайн', 'Нет бронирования', 'Слабые фильтры поиска'],
+          opportunities: ['Мобильное приложение', 'Видео-контент', 'Консультации онлайн'],
+          threats: ['Маркетплейсы', 'Нишевые конкуренты', 'Локальные магазины'],
+          functionalityScore: '⭐⭐⭐⭐',
+          priceScore: '⭐⭐⭐',
+          uxScore: '⭐⭐',
+          supportScore: '⭐⭐⭐⭐'
+        },
+        {
+          name: 'Akvarimir',
+          url: 'https://akvarimir.ru',
+          country: 'Россия',
+          description: 'Сеть магазинов аквариумистики с онлайн-продажами',
+          features: 'Живой товар, оборудование, корма; самовывоз и доставка',
+          pricing: 'Средние рыночные цены',
+          targetAudience: 'Любители аквариумистики',
+          strengths: ['Живой товар в наличии', 'Офлайн-магазины', 'Консультации'],
+          weaknesses: ['Ограниченная география', 'Слабый сайт', 'Мало фото/видео'],
+          opportunities: ['Онлайн-витрина', 'Доставка живого товара', 'SEO'],
+          threats: ['Крупные конкуренты', 'Маркетплейсы', 'Логистика'],
+          functionalityScore: '⭐⭐⭐',
+          priceScore: '⭐⭐⭐⭐',
+          uxScore: '⭐⭐',
+          supportScore: '⭐⭐⭐'
+        },
+        {
+          name: 'Avito / Юла',
+          url: 'https://avito.ru',
+          country: 'Россия',
+          description: 'Доски объявлений с разделами аквариумистики',
+          features: 'Частные объявления, живой товар, оборудование',
+          pricing: 'Бесплатные объявления, низкие цены',
+          targetAudience: 'Экономные покупатели, коллекционеры',
+          strengths: ['Бесплатно', 'Локальный поиск', 'Много предложений', 'Прямой контакт'],
+          weaknesses: ['Нет гарантии', 'Нет доставки живого', 'Риск обмана'],
+          opportunities: ['Интеграция с магазинами', 'Верификация продавцов'],
+          threats: ['Специализированные магазины', 'Регулирование'],
+          functionalityScore: '⭐⭐',
+          priceScore: '⭐⭐⭐⭐⭐',
+          uxScore: '⭐⭐⭐⭐',
+          supportScore: '⭐⭐'
+        }
+      ],
+      indirect: [
+        {
+          name: 'Pet-магазины (ZooRetail, Zoomag)',
+          description: 'Зоомагазины с разделами аквариумистики',
+          approach: 'Универсальный зоо-ассортимент',
+          overlap: 'Корма, оборудование, простые рыбки',
+          differentiation: 'Нет специализации, ограниченный выбор рыб'
+        },
+        {
+          name: 'Маркетплейсы (Ozon, Wildberries)',
+          description: 'Крупные маркетплейсы с товарами для аквариумов',
+          approach: 'Массовый рынок с доставкой',
+          overlap: 'Оборудование, корма, декор',
+          differentiation: 'Нет живого товара, сложно найти редкие виды'
+        },
+        {
+          name: 'Офлайн-зоомагазины',
+          description: 'Локальные магазины в городах',
+          approach: 'Покупка на месте с консультацией',
+          overlap: 'Живой товар, оборудование',
+          differentiation: 'Ограниченный ассортимент, нет онлайн-заказа'
+        }
+      ]
+    };
+  }
+
+  // E-commerce / Интернет-магазин (общий)
+  if (productType.id === 'ecommerce' || lowerDesc.includes('магазин') || lowerDesc.includes('торгов')) {
+    return {
+      direct: [
+        {
+          name: 'Маркетплейс (Ozon/WB)',
+          url: 'https://ozon.ru',
+          country: 'Россия',
+          description: 'Крупнейшие маркетплейсы с широкой аудиторией',
+          features: 'Огромный каталог, доставка, отзывы, реклама',
+          pricing: 'Комиссия с продаж 15-30%',
+          targetAudience: 'Массовый покупатель',
+          strengths: ['Трафик', 'Доставка', 'Доверие', 'Маркетинг'],
+          weaknesses: ['Комиссии', 'Конкуренция', 'Нет бренда продавца', 'Ценовые войны'],
+          opportunities: ['Экосистема', 'Рекламные инструменты'],
+          threats: ['Новые игроки', 'Регулирование'],
+          functionalityScore: '⭐⭐⭐⭐⭐',
+          priceScore: '⭐⭐⭐',
+          uxScore: '⭐⭐⭐⭐',
+          supportScore: '⭐⭐⭐'
+        },
+        {
+          name: 'Нишевой конкурент',
+          url: 'https://example.ru',
+          country: 'Россия',
+          description: 'Специализированный магазин в той же нише',
+          features: 'Узкая специализация, экспертность, сервис',
+          pricing: 'Средние цены с фокусом на качество',
+          targetAudience: 'Ценители качества, профессионалы',
+          strengths: ['Экспертность', 'Лояльность', 'Сервис', 'Ассортимент'],
+          weaknesses: ['Ограниченный охват', 'Меньше маркетинга', 'Зависимость от ниши'],
+          opportunities: ['Онлайн-расширение', 'Контент-маркетинг'],
+          threats: ['Маркетплейсы', 'Экономика'],
+          functionalityScore: '⭐⭐⭐⭐',
+          priceScore: '⭐⭐⭐',
+          uxScore: '⭐⭐⭐⭐',
+          supportScore: '⭐⭐⭐⭐⭐'
+        },
+        {
+          name: 'Независимый интернет-магазин',
+          url: 'https://shop.example.ru',
+          country: 'Россия',
+          description: 'Самостоятельный онлайн-магазин',
+          features: 'Собственный сайт, CRM, доставка',
+          pricing: 'Прямые цены без комиссий',
+          targetAudience: 'Покупатели ценящие бренд',
+          strengths: ['Бренд', 'Нет комиссий', 'Прямой контакт', 'Гибкость'],
+          weaknesses: ['Ограниченный трафик', 'Маркетинг', 'Доверие'],
+          opportunities: ['SEO', 'Контент', 'Соцсети'],
+          threats: ['Маркетплейсы', 'Стоимость привлечения'],
+          functionalityScore: '⭐⭐⭐',
+          priceScore: '⭐⭐⭐⭐',
+          uxScore: '⭐⭐⭐⭐',
+          supportScore: '⭐⭐⭐⭐'
+        }
+      ],
+      indirect: [
+        {
+          name: 'Социальные сети (VK, Instagram)',
+          description: 'Продажи через соцсети и мессенджеры',
+          approach: 'Прямые продажи через контент',
+          overlap: 'Привлечение клиентов, продажи',
+          differentiation: 'Нет каталога, сложно искать, ограниченный функционал'
+        },
+        {
+          name: 'Офлайн-магазины',
+          description: 'Традиционные розничные точки',
+          approach: 'Покупка на месте',
+          overlap: 'Товары, сервис',
+          differentiation: 'Нет онлайн-заказа, ограниченный ассортимент'
+        },
+        {
+          name: 'Доски объявлений',
+          description: 'Avito, Юла для частных продаж',
+          approach: 'Объявления от частников',
+          overlap: 'Поиск товаров, цены',
+          differentiation: 'Нет магазина, нет гарантий, разовые продажи'
+        }
+      ]
+    };
+  }
+
+  // === САЛОН СВЯЗИ / ТОЧКА ПРОДАЖ ОПЕРАТОРА ===
+  if (lowerDesc.includes('салон связи') || lowerDesc.includes('сим-карт') || lowerDesc.includes('симкарт') ||
+      lowerDesc.includes('оператор') && lowerDesc.includes('мобильн') ||
+      lowerName.includes('связь') || lowerDesc.includes('мтс') || lowerDesc.includes('билайн') ||
+      lowerDesc.includes('мегафон') || lowerDesc.includes('теле2')) {
+    return {
+      direct: [
+        {
+          name: 'МТС Салон',
+          url: 'https://mts.ru',
+          country: 'Россия',
+          description: 'Крупнейшая сеть салонов связи в России',
+          features: 'Сим-карты, смартфоны, тарифы, услуги, интернет, ТВ',
+          pricing: 'Федеральные цены, акции',
+          targetAudience: 'Массовый потребитель',
+          strengths: ['Покрытие', 'Бренд', 'Ассортимент', 'Сервис'],
+          weaknesses: ['Очереди', 'Агрессивные продажи', 'Сложные тарифы'],
+          opportunities: ['ESIM', 'Цифровые сервисы', 'Финтех'],
+          threats: ['Онлайн-продажи', 'Виртуальные операторы'],
+          functionalityScore: '⭐⭐⭐⭐⭐',
+          priceScore: '⭐⭐⭐',
+          uxScore: '⭐⭐⭐',
+          supportScore: '⭐⭐⭐⭐'
+        },
+        {
+          name: 'Билайн / Мегафон / Tele2',
+          url: 'https://beeline.ru',
+          country: 'Россия',
+          description: 'Федеральные операторы с сетями салонов',
+          features: 'Мобильная связь, интернет, цифровое ТВ, устройства',
+          pricing: 'Конкурентные тарифы, промо-акции',
+          targetAudience: 'Абоненты всех возрастов',
+          strengths: ['Инфраструктура', 'Экосистема', 'Бренд'],
+          weaknesses: ['Сложность процессов', 'Качество сервиса', 'Очереди'],
+          opportunities: ['5G', 'Цифровые сервисы', 'Партнёрства'],
+          threats: ['MVNO', 'Онлайн-каналы', 'Насыщение рынка'],
+          functionalityScore: '⭐⭐⭐⭐',
+          priceScore: '⭐⭐⭐⭐',
+          uxScore: '⭐⭐⭐',
+          supportScore: '⭐⭐⭐'
+        },
+        {
+          name: 'Евросеть / Связной',
+          url: 'https://euroset.ru',
+          country: 'Россия',
+          description: 'Ритейлеры мобильных устройств и услуг связи',
+          features: 'Смартфоны, аксессуары, сим-карты, услуги операторов',
+          pricing: 'Широкий ценовой диапазон',
+          targetAudience: 'Покупатели гаджетов и услуг связи',
+          strengths: ['Ассортимент устройств', 'Сравнение', 'Trade-in'],
+          weaknesses: ['Агрессивные продажи', 'Качество консультаций'],
+          opportunities: ['Онлайн', 'Сервисы', 'Вторичный рынок'],
+          threats: ['Маркетплейсы', 'Прямые продажи брендов'],
+          functionalityScore: '⭐⭐⭐',
+          priceScore: '⭐⭐⭐⭐',
+          uxScore: '⭐⭐⭐',
+          supportScore: '⭐⭐⭐'
+        }
+      ],
+      indirect: [
+        {
+          name: 'Онлайн-магазины операторов',
+          description: 'Цифровые каналы продаж операторов',
+          approach: 'Заказ сим-карт и устройств онлайн',
+          overlap: 'Продажа сим-карт, устройств, тарифов',
+          differentiation: 'Нет живого консультирования, нет мгновенного получения'
+        },
+        {
+          name: 'Маркетплейсы (Ozon, WB)',
+          description: 'Продажа смартфонов и аксессуаров',
+          approach: 'Онлайн-покупка с доставкой',
+          overlap: 'Устройства, аксессуары',
+          differentiation: 'Нет сим-карт, нет услуг связи, нет консультаций'
+        },
+        {
+          name: 'MVNO (виртуальные операторы)',
+          description: 'Yota, Тинькофф Мобайл, СберМобайл',
+          approach: 'Полностью цифровое обслуживание',
+          overlap: 'Мобильная связь, тарифы',
+          differentiation: 'Нет салонов, всё онлайн, доставка сим-карт'
+        }
+      ]
+    };
+  }
+
+  // === SAAS-ПЛАТФОРМА ===
+  if (lowerDesc.includes('saas') || lowerDesc.includes('облачн') || lowerDesc.includes('подписк') ||
+      productType.id === 'saas' || lowerDesc.includes('платформ') && lowerDesc.includes('b2b')) {
+    return {
+      direct: [
+        {
+          name: 'Лидер ниши',
+          url: 'https://competitor.com',
+          country: 'США/Европа',
+          description: 'Ведущий игрок в конкретной нише SaaS',
+          features: 'Полный функционал, API, интеграции, аналитика',
+          pricing: 'От $50-500/мес, enterprise тарифы',
+          targetAudience: 'Средний и крупный бизнес',
+          strengths: ['Функциональность', 'Бренд', 'Интеграции', 'Поддержка'],
+          weaknesses: ['Цена', 'Сложность', 'Нет локализации'],
+          opportunities: ['AI', 'Новые рынки', 'Вертикали'],
+          threats: ['Новые игроки', 'Open source', 'Экономика'],
+          functionalityScore: '⭐⭐⭐⭐⭐',
+          priceScore: '⭐⭐',
+          uxScore: '⭐⭐⭐⭐',
+          supportScore: '⭐⭐⭐⭐'
+        },
+        {
+          name: 'Российский аналог',
+          url: 'https://competitor.ru',
+          country: 'Россия',
+          description: 'Локальное SaaS-решение для рынка РФ',
+          features: 'Основной функционал, интеграции с российскими сервисами',
+          pricing: 'От 5000-50000₽/мес',
+          targetAudience: 'Российский бизнес',
+          strengths: ['Локализация', 'Интеграции с РФ-сервисами', 'Поддержка', 'Цена'],
+          weaknesses: ['Ограниченный функционал', 'Масштабируемость'],
+          opportunities: ['Импортозамещение', 'AI', 'Рынок СНГ'],
+          threats: ['Выход международных игроков', 'Кадры'],
+          functionalityScore: '⭐⭐⭐',
+          priceScore: '⭐⭐⭐⭐',
+          uxScore: '⭐⭐⭐⭐',
+          supportScore: '⭐⭐⭐⭐⭐'
+        },
+        {
+          name: 'No-code / Low-code платформа',
+          url: 'https://nocode.app',
+          country: 'Интернациональный',
+          description: 'Конструктор для создания своих решений',
+          features: 'Drag-and-drop, автоматизации, интеграции',
+          pricing: 'От $10-100/мес',
+          targetAudience: 'Малый бизнес, стартапы',
+          strengths: ['Гибкость', 'Цена', 'Быстрый старт'],
+          weaknesses: ['Ограничения', 'Производительность', 'Vendor lock'],
+          opportunities: ['AI-генерация', 'Шаблоны', 'Сообщество'],
+          threats: ['Специализированные решения', 'Бесплатные альтернативы'],
+          functionalityScore: '⭐⭐⭐',
+          priceScore: '⭐⭐⭐⭐⭐',
+          uxScore: '⭐⭐⭐⭐⭐',
+          supportScore: '⭐⭐⭐'
+        }
+      ],
+      indirect: [
+        {
+          name: 'Excel / Google Sheets',
+          description: 'Табличные процессоры для учёта',
+          approach: 'Самостоятельное создание системы',
+          overlap: 'Хранение данных, процессы',
+          differentiation: 'Нет автоматизации, нет интеграций, ручная работа'
+        },
+        {
+          name: 'Notion / Coda',
+          description: 'All-in-one workspace платформы',
+          approach: 'Гибкое структурирование процессов',
+          overlap: 'Управление данными, документация',
+          differentiation: 'Нет специализации, ограниченная автоматизация'
+        },
+        {
+          name: 'Open source решения',
+          description: 'Бесплатные self-hosted платформы',
+          approach: 'Самостоятельное развёртывание',
+          overlap: 'Базовый функционал',
+          differentiation: 'Требует технических знаний, нет поддержки'
+        }
+      ]
+    };
+  }
+
+  // Проверяем есть ли готовая база для этого типа
+  if (COMPETITORS_DB[productType.id]) {
+    return COMPETITORS_DB[productType.id];
+  }
+
+  // Если нет готовой базы, генерируем общих конкурентов
+  return {
+    direct: [
+      {
+        name: 'Лидер рынка',
+        url: 'https://example.com',
+        country: 'США/Европа',
+        description: 'Ведущий игрок в нише с широким функционалом',
+        features: 'Полный набор функций, интеграции, API',
+        pricing: 'От $50-200/мес',
+        targetAudience: 'Средний и крупный бизнес',
+        strengths: ['Бренд', 'Функциональность', 'Надёжность', 'Поддержка'],
+        weaknesses: ['Цена', 'Сложность', 'Нет локализации', 'Долгое внедрение'],
+        opportunities: ['Выход на новые рынки', 'SMB-сегмент', 'AI-функции'],
+        threats: ['Новые игроки', 'Open source альтернативы', 'Экономический фактор'],
+        functionalityScore: '⭐⭐⭐⭐⭐',
+        priceScore: '⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Российский аналог',
+        url: 'https://example.ru',
+        country: 'Россия',
+        description: 'Локальное решение с адаптацией под рынок РФ',
+        features: 'Базовый функционал, интеграция с российскими сервисами',
+        pricing: 'От 1000-5000₽/мес',
+        targetAudience: 'Российский бизнес',
+        strengths: ['Локализация', 'Поддержка на русском', 'Интеграции', 'Цена'],
+        weaknesses: ['Ограниченный функционал', 'Масштабируемость', 'Технологии'],
+        opportunities: ['Развитие функций', 'AI', 'Мобильность'],
+        threats: ['Зарубежные решения', 'Кадры', 'Технологии'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐',
+        supportScore: '⭐⭐⭐⭐'
+      },
+      {
+        name: 'Start-up конкурент',
+        url: 'https://startup.example.com',
+        country: 'Интернациональный',
+        description: 'Молодой проект с инновационным подходом',
+        features: 'Современный UI, AI-функции, быстрый старт',
+        pricing: 'Freemium / от $10-30/мес',
+        targetAudience: 'Стартапы, малый бизнес',
+        strengths: ['Инновации', 'Современный UI', 'Гибкость', 'Цена'],
+        weaknesses: ['Надёжность', 'Ограниченный функционал', 'Поддержка', 'Документация'],
+        opportunities: ['Развитие', 'Инвестиции', 'Партнёрства'],
+        threats: ['Большие игроки', 'Финансирование', 'Команда'],
+        functionalityScore: '⭐⭐⭐',
+        priceScore: '⭐⭐⭐⭐⭐',
+        uxScore: '⭐⭐⭐⭐⭐',
+        supportScore: '⭐⭐'
+      }
+    ],
+    indirect: [
+      {
+        name: 'Excel / Google Sheets',
+        description: 'Табличные процессоры для самостоятельного учёта',
+        approach: 'Самостоятельное создание системы',
+        overlap: 'Хранение и обработка данных',
+        differentiation: 'Нет автоматизации, требует ручной работы'
+      },
+      {
+        name: 'Notion',
+        description: 'All-in-one workspace',
+        approach: 'Гибкое структурирование информации',
+        overlap: 'Управление данными и процессами',
+        differentiation: 'Нет специализации под конкретную задачу'
+      },
+      {
+        name: 'Ручное управление / Legacy-системы',
+        description: 'Старые методы и системы',
+        approach: 'Традиционные процессы',
+        overlap: 'Решение проблемы',
+        differentiation: 'Низкая эффективность, несовременность'
+      }
+    ]
+  };
+}
+
+// === ГЕНЕРАЦИЯ CJM НА ОСНОВЕ КОНТЕКСТА ===
+function generateContextualCJM(idea: {
+  name: string;
+  description: string;
+  functions: string[];
+  useCases: string[];
+  userTypes: string;
+  valueProposition: string;
+  risks: string[];
+  difficulties: string[];
+}, sourceAnalysis: {
+  name: string;
+  description: string;
+  functions: string[];
+  useCases: string[];
+}): {
+  title: string;
+  mermaidSections: string;
+  detailedTable: string;
+  recommendations: string;
+} {
+  console.log('[generateContextualCJM] Генерация CJM для:', idea.name);
+
+  // Определяем тип продукта для контекстных этапов
+  const lowerDesc = (idea.description + ' ' + idea.valueProposition + ' ' + idea.functions.join(' ')).toLowerCase();
+
+  // Структуры для разных типов продуктов
+  let stages: { name: string; steps: { action: string; emotion: number }[] }[] = [];
+
+  // === E-COMMERCE / МАГАЗИН ===
+  if (lowerDesc.includes('магазин') || lowerDesc.includes('товар') || lowerDesc.includes('покуп') || lowerDesc.includes('каталог')) {
+
+    // Определяем специфику
+    const isAquarium = lowerDesc.includes('аквариум') || lowerDesc.includes('рыб') || lowerDesc.includes('водоросл');
+    const isFood = lowerDesc.includes('продукт') && (lowerDesc.includes('ед') || lowerDesc.includes('бакале'));
+    const isClothes = lowerDesc.includes('одежд') || lowerDesc.includes('обув');
+
+    if (isAquarium) {
+      // Аквариумистика
+      const func1 = idea.functions[0]?.substring(0, 30) || 'Поиск по тегам';
+      const func2 = idea.functions[1]?.substring(0, 30) || 'Бронирование';
+      stages = [
+        { name: 'Осознание', steps: [
+          { action: 'Хочу купить рыбку/растение', emotion: 3 },
+          { action: 'Ищу конкретный вид или характеристики', emotion: 2 }
+        ]},
+        { name: 'Поиск', steps: [
+          { action: 'Гуглю "рыбки для начинающих" или конкретный вид', emotion: 2 },
+          { action: 'Сравниваю магазины по наличию и фото', emotion: 3 }
+        ]},
+        { name: 'Выбор', steps: [
+          { action: 'Фильтрую по тегам: мирные, чистильщики, для новичков', emotion: 4 },
+          { action: 'Смотрю фото/видео, читаю описание', emotion: 4 },
+          { action: `Использую: ${func1}`, emotion: 5 }
+        ]},
+        { name: 'Покупка', steps: [
+          { action: 'Вижу актуальные остатки в наличии', emotion: 5 },
+          { action: `Бронирую товар: ${func2}`, emotion: 4 },
+          { action: 'Выбираю доставку или самовывоз', emotion: 4 }
+        ]},
+        { name: 'Получение', steps: [
+          { action: 'Получаю консультацию по содержанию', emotion: 5 },
+          { action: 'Забираю в магазине / получаю доставку', emotion: 4 }
+        ]},
+        { name: 'Лояльность', steps: [
+          { action: 'Рыбка здоровая, всё отлично', emotion: 5 },
+          { action: 'Возвращаюсь за кормом и аксессуарами', emotion: 5 },
+          { action: 'Рекомендую друзьям-аквариумистам', emotion: 5 }
+        ]}
+      ];
+    } else if (isFood) {
+      // Продукты питания
+      stages = [
+        { name: 'Осознание', steps: [
+          { action: 'Закончились продукты дома', emotion: 3 },
+          { action: 'Решаю заказать онлайн', emotion: 3 }
+        ]},
+        { name: 'Выбор', steps: [
+          { action: 'Смотрю каталог по категориям', emotion: 3 },
+          { action: 'Добавляю товары в корзину', emotion: 4 }
+        ]},
+        { name: 'Оформление', steps: [
+          { action: 'Выбираю время доставки', emotion: 4 },
+          { action: 'Оплачиваю онлайн', emotion: 4 }
+        ]},
+        { name: 'Получение', steps: [
+          { action: 'Отслеживаю статус заказа', emotion: 3 },
+          { action: 'Получаю доставку', emotion: 5 }
+        ]},
+        { name: 'Лояльность', steps: [
+          { action: 'Оцениваю качество продуктов', emotion: 4 },
+          { action: 'Заказываю снова', emotion: 5 }
+        ]}
+      ];
+    } else {
+      // Общий e-commerce
+      const func1 = idea.functions[0]?.substring(0, 30) || 'Каталог товаров';
+      stages = [
+        { name: 'Осознание', steps: [
+          { action: 'Появилась потребность в товаре', emotion: 3 },
+          { action: 'Ищу где купить', emotion: 2 }
+        ]},
+        { name: 'Поиск', steps: [
+          { action: 'Ищу в интернете, сравниваю цены', emotion: 3 },
+          { action: 'Изучаю отзывы и рейтинги', emotion: 3 }
+        ]},
+        { name: 'Выбор', steps: [
+          { action: `Использую: ${func1}`, emotion: 4 },
+          { action: 'Сравниваю варианты, читаю характеристики', emotion: 4 }
+        ]},
+        { name: 'Покупка', steps: [
+          { action: 'Добавляю в корзину', emotion: 4 },
+          { action: 'Оформляю заказ и оплачиваю', emotion: 4 }
+        ]},
+        { name: 'Получение', steps: [
+          { action: 'Отслеживаю доставку', emotion: 3 },
+          { action: 'Получаю товар', emotion: 5 }
+        ]},
+        { name: 'Лояльность', steps: [
+          { action: 'Оцениваю качество', emotion: 4 },
+          { action: 'Рекомендую или возвращаюсь', emotion: 5 }
+        ]}
+      ];
+    }
+  }
+  // === СЕРВИС ЗАПИСИ / БРОНИРОВАНИЕ ===
+  else if (lowerDesc.includes('запись') || lowerDesc.includes('брон') || lowerDesc.includes('слот') || lowerDesc.includes('расписание')) {
+    stages = [
+      { name: 'Осознание', steps: [
+        { action: 'Нужна запись к мастеру/врачу', emotion: 3 },
+        { action: 'Хочу удобное время', emotion: 2 }
+      ]},
+      { name: 'Поиск', steps: [
+        { action: 'Ищу мастера/клинику', emotion: 3 },
+        { action: 'Смотрю расписание и свободные слоты', emotion: 4 }
+      ]},
+      { name: 'Выбор', steps: [
+        { action: 'Выбираю удобное время', emotion: 4 },
+        { action: 'Проверяю цены и условия', emotion: 4 }
+      ]},
+      { name: 'Запись', steps: [
+        { action: 'Бронирую слот онлайн', emotion: 5 },
+        { action: 'Получаю подтверждение', emotion: 5 }
+      ]},
+      { name: 'Посещение', steps: [
+        { action: 'Получаю напоминание', emotion: 4 },
+        { action: 'Прихожу вовремя', emotion: 5 }
+      ]},
+      { name: 'Лояльность', steps: [
+        { action: 'Доволен сервисом', emotion: 5 },
+        { action: 'Записываюсь снова', emotion: 5 }
+      ]}
+    ];
+  }
+  // === САЛОН СВЯЗИ / ТОЧКА ПРОДАЖ ОПЕРАТОРА ===
+  else if (lowerDesc.includes('салон связи') || lowerDesc.includes('сим-карт') || lowerDesc.includes('симкарт') ||
+           lowerDesc.includes('оператор') && lowerDesc.includes('мобильн') ||
+           lowerDesc.includes('мтс') || lowerDesc.includes('билайн') || lowerDesc.includes('мегафон') ||
+           lowerDesc.includes('теле2') || lowerDesc.includes('тариф')) {
+    stages = [
+      { name: 'Осознание', steps: [
+        { action: 'Нужна сим-карта / новый тариф / смартфон', emotion: 3 },
+        { action: 'Хочу проконсультироваться лично', emotion: 3 }
+      ]},
+      { name: 'Поиск салона', steps: [
+        { action: 'Ищу ближайший салон связи', emotion: 3 },
+        { action: 'Смотрю часы работы и отзывы', emotion: 3 }
+      ]},
+      { name: 'Посещение', steps: [
+        { action: 'Прихожу в салон', emotion: 3 },
+        { action: 'Получаю консультацию специалиста', emotion: 4 }
+      ]},
+      { name: 'Выбор услуги', steps: [
+        { action: 'Сравниваю тарифы и условия', emotion: 4 },
+        { action: 'Выбираю смартфон/аксессуар', emotion: 4 }
+      ]},
+      { name: 'Оформление', steps: [
+        { action: 'Оформляю договор/сим-карту', emotion: 4 },
+        { action: 'Оплачиваю покупку', emotion: 4 }
+      ]},
+      { name: 'Лояльность', steps: [
+        { action: 'Услуга работает корректно', emotion: 5 },
+        { action: 'Возвращаюсь за доп. услугами', emotion: 5 }
+      ]}
+    ];
+  }
+  // === SAAS-ПЛАТФОРМА ===
+  else if (lowerDesc.includes('saas') || lowerDesc.includes('облачн') || lowerDesc.includes('подписк') ||
+           lowerDesc.includes('api') || lowerDesc.includes('b2b')) {
+    const func1 = idea.functions[0]?.substring(0, 30) || 'Основная функция';
+    const func2 = idea.functions[1]?.substring(0, 30) || 'Доп. возможности';
+    stages = [
+      { name: 'Осознание', steps: [
+        { action: 'Понимаю бизнес-проблему', emotion: 3 },
+        { action: 'Ищу решение для автоматизации', emotion: 2 }
+      ]},
+      { name: 'Исследование', steps: [
+        { action: 'Изучаю SaaS-решения на рынке', emotion: 3 },
+        { action: 'Сравниваю функции и цены', emotion: 3 }
+      ]},
+      { name: 'Триал', steps: [
+        { action: 'Регистрируюсь на триал', emotion: 4 },
+        { action: 'Тестирую ключевые функции', emotion: 4 }
+      ]},
+      { name: 'Внедрение', steps: [
+        { action: `Настраиваю: ${func1}`, emotion: 4 },
+        { action: `Интегрирую: ${func2}`, emotion: 3 }
+      ]},
+      { name: 'Использование', steps: [
+        { action: 'Внедряю в команды/процессы', emotion: 4 },
+        { action: 'Вижу ROI и пользу', emotion: 5 }
+      ]},
+      { name: 'Лояльность', steps: [
+        { action: 'Перехожу на платный тариф', emotion: 5 },
+        { action: 'Рекомендую партнёрам', emotion: 5 }
+      ]}
+    ];
+  }
+  // === ПЛАТФОРМА / СЕРВИС ===
+  else if (lowerDesc.includes('платформ') || lowerDesc.includes('сервис') || lowerDesc.includes('приложен')) {
+    const func1 = idea.functions[0]?.substring(0, 30) || 'Основная функция';
+    const func2 = idea.functions[1]?.substring(0, 30) || 'Доп. возможности';
+    stages = [
+      { name: 'Осознание', steps: [
+        { action: 'Понимаю потребность', emotion: 3 },
+        { action: 'Ищу решение проблемы', emotion: 2 }
+      ]},
+      { name: 'Поиск', steps: [
+        { action: 'Изучаю варианты на рынке', emotion: 3 },
+        { action: 'Сравниваю функции и цены', emotion: 3 }
+      ]},
+      { name: 'Регистрация', steps: [
+        { action: 'Регистрируюсь в сервисе', emotion: 3 },
+        { action: 'Прохожу онбординг', emotion: 4 }
+      ]},
+      { name: 'Использование', steps: [
+        { action: `Использую: ${func1}`, emotion: 5 },
+        { action: `Пробую: ${func2}`, emotion: 4 }
+      ]},
+      { name: 'Ценность', steps: [
+        { action: 'Получаю результат', emotion: 5 },
+        { action: 'Вижу пользу от использования', emotion: 5 }
+      ]},
+      { name: 'Лояльность', steps: [
+        { action: 'Рекомендую коллегам', emotion: 5 },
+        { action: 'Продолжаю использовать', emotion: 5 }
+      ]}
+    ];
+  }
+  // === ДЕФОЛТНЫЙ ВАРИАНТ ===
+  else {
+    const func1 = idea.functions[0]?.substring(0, 30) || 'Основная функция';
+    stages = [
+      { name: 'Осознание', steps: [
+        { action: 'Появилась потребность', emotion: 3 },
+        { action: 'Ищу решение', emotion: 2 }
+      ]},
+      { name: 'Поиск', steps: [
+        { action: 'Изучаю рынок и варианты', emotion: 3 },
+        { action: 'Сравниваю альтернативы', emotion: 3 }
+      ]},
+      { name: 'Решение', steps: [
+        { action: 'Выбираю продукт', emotion: 4 },
+        { action: 'Начинаю использовать', emotion: 4 }
+      ]},
+      { name: 'Использование', steps: [
+        { action: `Использую: ${func1}`, emotion: 5 },
+        { action: 'Осваиваю функционал', emotion: 4 }
+      ]},
+      { name: 'Результат', steps: [
+        { action: 'Получаю ценность', emotion: 5 },
+        { action: 'Достигаю цели', emotion: 5 }
+      ]},
+      { name: 'Лояльность', steps: [
+        { action: 'Доволен результатом', emotion: 5 },
+        { action: 'Рекомендую другим', emotion: 5 }
+      ]}
+    ];
+  }
+
+  // Генерируем Mermaid код
+  const mermaidSections = stages.map(stage => {
+    const stepsText = stage.steps.map(s => `      ${s.action}: ${s.emotion}: Пользователь`).join('\n');
+    return `    section ${stage.name}\n${stepsText}`;
+  }).join('\n');
+
+  // Генерируем детальную таблицу
+  const tableRows = stages.map(stage => {
+    const goal = stage.steps.length > 0 ? stage.steps[0].action.substring(0, 40) : 'Цель этапа';
+    const touchpoints = stage.name === 'Поиск' ? 'Поиск, Реклама, Соцсети' :
+                       stage.name === 'Выбор' ? 'Сайт, Каталог, Фильтры' :
+                       stage.name === 'Покупка' || stage.name === 'Запись' ? 'Корзина, Форма, Оплата' :
+                       stage.name === 'Использование' ? 'Продукт, Интерфейс' :
+                       stage.name === 'Лояльность' ? 'Email, Мессенджеры' : 'Сайт, Приложение';
+    const avgEmotion = Math.round(stage.steps.reduce((sum, s) => sum + s.emotion, 0) / stage.steps.length);
+    const pain = stage.steps.some(s => s.emotion <= 3) ?
+      (stage.name === 'Поиск' ? 'Много вариантов, сложно выбрать' :
+       stage.name === 'Регистрация' ? 'Долгие формы, капчи' :
+       stage.name === 'Осознание' ? 'Не знает о продукте' : 'Требуется помощь') : 'Минимальные боли';
+
+    return `| ${stage.name} | ${goal} | ${touchpoints} | ${avgEmotion}/5 | ${pain} |`;
+  }).join('\n');
+
+  const detailedTable = `| Этап | Цель | Touchpoints | Эмоция | Боли |
+|------|------|-------------|--------|------|
+${tableRows}`;
+
+  // Рекомендации по улучшению
+  const recommendations: string[] = [];
+
+  // Анализируем боли и даём рекомендации
+  stages.forEach(stage => {
+    if (stage.steps.some(s => s.emotion <= 3)) {
+      if (stage.name === 'Осознание') {
+        recommendations.push('**Осознание:** Усилить SEO и контент-маркетинг, чтобы пользователи находили продукт при поиске');
+      } else if (stage.name === 'Поиск') {
+        recommendations.push('**Поиск:** Упростить сравнение с конкурентами, добавить наглядную таблицу преимуществ');
+      } else if (stage.name === 'Регистрация') {
+        recommendations.push('**Регистрация:** Минимизировать поля формы, добавить вход через соцсети');
+      }
+    }
+  });
+
+  // Добавляем рекомендации на основе функций
+  if (idea.functions.length >= 3) {
+    recommendations.push(`**Использование:** Акцент на ключевых функциях: ${idea.functions.slice(0, 2).join(', ')}`);
+  }
+
+  // Рекомендации на основе рисков
+  if (idea.risks.length > 0) {
+    const mainRisk = idea.risks[0].substring(0, 50);
+    recommendations.push(`**Митигация риска:** ${mainRisk}... — предусмотреть решение на этапе онбординга`);
+  }
+
+  // Рекомендации на основе ценности
+  if (idea.valueProposition) {
+    recommendations.push(`**Ценность:** Подчеркнуть в CJM: "${idea.valueProposition.substring(0, 60)}..."`);
+  }
+
+  return {
+    title: `Путь пользователя "${idea.name}"`,
+    mermaidSections,
+    detailedTable,
+    recommendations: recommendations.slice(0, 5).map((r, i) => `${i + 1}. ${r}`).join('\n')
+  };
+}
+
+function getFallbackResponse(agentType: string, message: string): string {
+  const lowerMessage = message.toLowerCase();
+  
+  // === ИЗВЛЕКАЕМ ИСХОДНЫЙ ТЕКСТ (для transcription_analyst) ===
+  let sourceText = '';
+  
+  // Паттерн 1: После "Исходный текст:"
+  const sourceMatch = message.match(/Исходный текст:\s*([\s\S]*)$/i);
+  if (sourceMatch && sourceMatch[1]) {
+    sourceText = sourceMatch[1].trim();
+  }
+  
+  // Паттерн 2: Последний существенный абзац
+  if (!sourceText || sourceText.length < 20) {
+    const paragraphs = message.split(/\n\n+/).filter(p => p.trim().length > 20);
+    if (paragraphs.length > 0) {
+      for (let i = paragraphs.length - 1; i >= 0; i--) {
+        if (!paragraphs[i].includes('Проанализируй') && 
+            !paragraphs[i].includes('Структура ответа') &&
+            !paragraphs[i].startsWith('##')) {
+          sourceText = paragraphs[i].trim();
+          break;
+        }
+      }
+    }
+  }
+  
+  // Паттерн 3: Весь текст если ничего не найдено
+  if (!sourceText || sourceText.length < 20) {
+    sourceText = message.trim();
+  }
+  
+  // === АНАЛИТИК ИДЕЙ (только для первого этапа - анализирует исходный текст) ===
+  // ИСПОЛЬЗУЕМ ТОЛЬКО КОНТЕКСТ ИЗ ТРАНСКРИБАЦИИ - БЕЗ ШАБЛОНОВ!
+  if (agentType === 'transcription_analyst') {
+    console.log(`[Fallback transcription_analyst] sourceText: "${sourceText.substring(0, 200)}..."`);
+    
+    // Используем новый модуль idea-extractor
+    const idea = extractIdeaFromText(sourceText);
+    
+    return formatIdeaAsMarkdown(idea);
+  }
+
+  // === ИЗВЛЕКАЕМ ИДЕЮ ИЗ ПРЕДЫДУЩИХ АРТЕФАКТОВ ===
+  // Каждый агент получает артефакты от предыдущих агентов
+  const formedIdea = extractFormedIdea(message);
+  const idea = formedIdea ? {
+    name: formedIdea.name,
+    description: formedIdea.description,
+    functions: formedIdea.functions,
+    useCases: [],
+    userTypes: '',
+    valueProposition: '',
+    risks: [],
+    difficulties: [],
+  } : extractIdeaFromText(sourceText);
+  
+  console.log(`[getFallbackResponse] Извлечена идея: "${idea.name}", функций: ${idea.functions.length}`);
+
+  // === ИЗВЛЕКАЕМ SOURCE ANALYSIS (для CJM и IA) ===
+  const sourceAnalysis = {
+    name: idea.name,
+    description: idea.description,
+    functions: idea.functions,
+    useCases: idea.useCases?.length > 0 ? idea.useCases : idea.functions.slice(0, 3),
+    userTypes: idea.userTypes || 'Пользователи продукта',
+  };
+
+  // === МАРКЕТОЛОГ ===
+  if (agentType === 'brand_marketer') {
+    // Используем новый модуль competitor-analyzer для уникального SWOT
+    console.log(`[brand_marketer] Using competitor-analyzer for: "${idea.name}"`);
+    
+    try {
+      const analysis = analyzeCompetitors(idea);
+      return formatCompetitorAnalysisAsMarkdown(analysis);
+    } catch (error) {
+      console.error('[brand_marketer] Error using competitor-analyzer:', error);
+      
+      // Fallback к старому методу
+      const fullContext = message + ' ' + idea.name + ' ' + idea.description + ' ' + idea.functions.join(' ');
+      const detectedIndustry = detectIndustry(fullContext);
+      
+      const productType = detectedIndustry 
+        ? { 
+            id: detectedIndustry.id, 
+            name: detectedIndustry.name, 
+            keywords: detectedIndustry.keywords,
+            marketSize: detectedIndustry.marketSize,
+            trends: detectedIndustry.trends,
+            barriers: detectedIndustry.barriers,
+            positioning: detectedIndustry.positioning
+          }
+        : detectProductType(fullContext);
+      
+      const competitors = generateCompetitors(productType, idea);
+      
+      return `## 🔍 Конкурентный анализ для "${idea.name}"
+
+### Тип продукта: ${productType.name}
+
+---
+
+### 1. ПРЯМЫЕ КОНКУРЕНТЫ
+
+${competitors.direct.map((c, i) => `#### ${i + 1}. ${c.name} ${c.country ? `(${c.country})` : ''}
+- **Сайт:** ${c.url}
+- **Описание:** ${c.description}
+- **Основные функции:** ${c.features}
+- **Ценовая модель:** ${c.pricing}
+- **Целевая аудитория:** ${c.targetAudience}
+
+**SWOT-анализ:**
+| Сильные стороны | Слабые стороны |
+|-----------------|----------------|
+| ${c.strengths.join('<br>')} | ${c.weaknesses.join('<br>')} |
+
+| Возможности | Угрозы |
+|-------------|--------|
+| ${c.opportunities.join('<br>')} | ${c.threats.join('<br>')} |
+`).join('\n')}
+
+### 2. КОСВЕННЫЕ КОНКУРЕНТЫ
+
+${competitors.indirect.map((c, i) => `#### ${i + 1}. ${c.name}
+- **Описание:** ${c.description}
+- **Как решает проблему:** ${c.approach}
+- **Пересечение с нашим продуктом:** ${c.overlap}
+- **Ключевые отличия:** ${c.differentiation}
+`).join('\n')}
+
+### 3. СРАВНИТЕЛЬНАЯ ТАБЛИЦА
+
+| Критерий | ${competitors.direct.map(c => c.name).join(' | ')} | ${idea.name} |
+|----------|${competitors.direct.map(() => '----------|').join('')}----------|
+| Функциональность | ${competitors.direct.map(c => c.functionalityScore).join(' | ')} | ⭐⭐⭐⭐ |
+| Цена | ${competitors.direct.map(c => c.priceScore).join(' | ')} | ⭐⭐⭐⭐ |
+| UX/UI | ${competitors.direct.map(c => c.uxScore).join(' | ')} | ⭐⭐⭐⭐⭐ |
+| Поддержка | ${competitors.direct.map(c => c.supportScore).join(' | ')} | ⭐⭐⭐⭐ |
+
+### 4. ВОЗМОЖНОСТИ ДИФФЕРЕНЦИАЦИИ
+
+На основе анализа конкурентов, ключевые возможности для дифференциации **${idea.name}**:
+
+1. **Упрощение интерфейса** — большинство конкурентов имеют перегруженный UI
+2. **Локализация для РФ** — многие зарубежные решения плохо работают с российскими платёжными системами
+3. **Интеграции** — возможность интеграции с популярными российскими сервисами
+4. **Ценовая доступность** — конкурентные цены для малого и среднего бизнеса
+5. **Персонализация** — адаптация под конкретные потребности клиента
+
+### 5. РЕКОМЕНДАЦИИ ПО ПОЗИЦИОНИРОВАНИЮ
+
+${idea.name} должен позиционироваться как ${productType.positioning} с акцентом на:
+- ${idea.functions[0] || 'Простоту использования'}
+- Российский рынок и локальные особенности
+- Соотношение цена/качество`;
+    }
+  }
+
+  // === CJM - ГЕНЕРАЦИЯ НА ОСНОВЕ КОНТЕКСТА ИДЕИ ===
+  if (agentType === 'cjm_researcher') {
+    // Генерируем CJM на основе КОНКРЕТНОГО контекста продукта
+    const cjmStages = generateContextualCJM(idea, sourceAnalysis);
+
+    return `## 🗺️ Customer Journey Map для "${idea.name}"
+
+\`\`\`mermaid
+journey
+    title ${cjmStages.title}
+${cjmStages.mermaidSections}
+\`\`\`
+
+### Детальный анализ этапов
+
+${cjmStages.detailedTable}
+
+### Ключевые инсайты для "${idea.name}"
+
+**Суть продукта:** ${idea.description}
+
+**Целевая аудитория:**
+${idea.userTypes}
+
+**Ключевая ценность:** ${idea.valueProposition}
+
+**Точки боли:**
+${idea.risks.slice(0, 3).map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+**Рекомендации по улучшению CJM:**
+${cjmStages.recommendations}`;
+  }
+
+  if (agentType === 'ia_architect') {
+    // Функция для генерации контекстной IA
+    const generateContextualIA = () => {
+      const fullContext = message + ' ' + idea.name + ' ' + idea.description + ' ' + idea.functions.join(' ');
+      const lowerContext = fullContext.toLowerCase();
+      
+      // Определяем тип продукта для IA
+      let productType = 'default';
+      let mainEntity = 'ITEM';
+      let entityFields = ['id', 'title', 'status'];
+      
+      // Определяем тип продукта и его сущности
+      if (lowerContext.includes('аквариум') || lowerContext.includes('рыб') || lowerContext.includes('аквариумист')) {
+        productType = 'aquarium';
+        mainEntity = 'PRODUCT';
+        entityFields = ['id', 'name', 'category', 'price', 'stock'];
+      } else if (lowerContext.includes('crm') || lowerContext.includes('сделк') || lowerContext.includes('клиент')) {
+        productType = 'crm';
+        mainEntity = 'DEAL';
+        entityFields = ['id', 'title', 'stage', 'value', 'contact_id'];
+      } else if (lowerContext.includes('запис') || lowerContext.includes('брон') || lowerContext.includes('слот') || lowerContext.includes('yclients')) {
+        productType = 'booking';
+        mainEntity = 'APPOINTMENT';
+        entityFields = ['id', 'date', 'time', 'service_id', 'client_id', 'status'];
+      } else if (lowerContext.includes('такси') || lowerContext.includes('поездк') || lowerContext.includes('водитель')) {
+        productType = 'taxi';
+        mainEntity = 'RIDE';
+        entityFields = ['id', 'from', 'to', 'price', 'status', 'driver_id'];
+      } else if (lowerContext.includes('магазин') || lowerContext.includes('товар') || lowerContext.includes('каталог') || lowerContext.includes('e-commerce')) {
+        productType = 'ecommerce';
+        mainEntity = 'PRODUCT';
+        entityFields = ['id', 'name', 'price', 'category', 'stock', 'image'];
+      } else if (lowerContext.includes('доставк') || lowerContext.includes('логистик') || lowerContext.includes('груз')) {
+        productType = 'logistics';
+        mainEntity = 'SHIPMENT';
+        entityFields = ['id', 'tracking_code', 'from', 'to', 'status', 'eta'];
+      } else if (lowerContext.includes('образован') || lowerContext.includes('курс') || lowerContext.includes('урок')) {
+        productType = 'education';
+        mainEntity = 'COURSE';
+        entityFields = ['id', 'title', 'duration', 'progress', 'lessons_count'];
+      } else if (lowerContext.includes('здоров') || lowerContext.includes('врач') || lowerContext.includes('медицин')) {
+        productType = 'health';
+        mainEntity = 'APPOINTMENT';
+        entityFields = ['id', 'date', 'doctor_id', 'patient_id', 'status', 'type'];
+      } else if (lowerContext.includes('финанс') || lowerContext.includes('платёж') || lowerContext.includes('банк')) {
+        productType = 'fintech';
+        mainEntity = 'TRANSACTION';
+        entityFields = ['id', 'amount', 'type', 'status', 'created_at', 'account_id'];
+      } else if (lowerContext.includes('hr') || lowerContext.includes('ваканси') || lowerContext.includes('кандидат')) {
+        productType = 'hr';
+        mainEntity = 'VACANCY';
+        entityFields = ['id', 'title', 'department', 'status', 'applicants_count'];
+      } else if (lowerContext.includes('задач') || lowerContext.includes('проект') || lowerContext.includes('kanban')) {
+        productType = 'task';
+        mainEntity = 'TASK';
+        entityFields = ['id', 'title', 'status', 'priority', 'assignee_id', 'deadline'];
+      } else if (lowerContext.includes('чат') || lowerContext.includes('сообщен') || lowerContext.includes('мессендж')) {
+        productType = 'messenger';
+        mainEntity = 'MESSAGE';
+        entityFields = ['id', 'content', 'chat_id', 'sender_id', 'created_at', 'read'];
+      }
+      
+      // Генерируем названия разделов на основе функций
+      const func1Name = idea.functions[0]?.substring(0, 25) || 'Главная';
+      const func2Name = idea.functions[1]?.substring(0, 25) || 'Каталог';
+      const func3Name = idea.functions[2]?.substring(0, 25) || 'Профиль';
+      
+      // Названия сущностей в зависимости от типа
+      const entityNames: Record<string, { main: string; secondary: string; action: string }> = {
+        aquarium: { main: 'PRODUCT', secondary: 'CATEGORY', action: 'ORDER' },
+        crm: { main: 'DEAL', secondary: 'CONTACT', action: 'TASK' },
+        booking: { main: 'APPOINTMENT', secondary: 'SERVICE', action: 'CLIENT' },
+        taxi: { main: 'RIDE', secondary: 'DRIVER', action: 'PAYMENT' },
+        ecommerce: { main: 'PRODUCT', secondary: 'CATEGORY', action: 'ORDER' },
+        logistics: { main: 'SHIPMENT', secondary: 'ROUTE', action: 'DOCUMENT' },
+        education: { main: 'COURSE', secondary: 'LESSON', action: 'PROGRESS' },
+        health: { main: 'APPOINTMENT', secondary: 'DOCTOR', action: 'RECORD' },
+        fintech: { main: 'TRANSACTION', secondary: 'ACCOUNT', action: 'PAYMENT' },
+        hr: { main: 'VACANCY', secondary: 'CANDIDATE', action: 'APPLICATION' },
+        task: { main: 'TASK', secondary: 'PROJECT', action: 'COMMENT' },
+        messenger: { main: 'MESSAGE', secondary: 'CHAT', action: 'ATTACHMENT' },
+        default: { main: 'ITEM', secondary: 'CATEGORY', action: 'ACTION' }
+      };
+      
+      const entities = entityNames[productType] || entityNames.default;
+      
+      // Создаем структуру разделов
+      const sections = [
+        { name: func1Name, desc: 'Основной функционал', items: ['Просмотр', 'Поиск', 'Фильтры'] },
+        { name: func2Name, desc: 'Дополнительные возможности', items: ['Управление', 'Настройки', 'Экспорт'] },
+        { name: func3Name, desc: 'Личное пространство', items: ['Профиль', 'История', 'Избранное'] }
+      ];
+      
+      // Генерируем mindmap
+      const mindmapSections = sections.map(s => `    ${s.name}
+      ${s.items.map(i => i).join('\n      ')}`).join('\n');
+      
+      // Генерируем ER-диаграмму
+      const erDiagram = `erDiagram
+    USER ||--o{ ${entities.main} : creates
+    USER ||--o{ ${entities.action} : performs
+    USER {
+        string id PK
+        string email
+        string name
+        string avatar
+        datetime created_at
+    }
+    ${entities.main} {
+        string id PK
+        ${entityFields.slice(1).map(f => `string ${f}`).join('\n        ')}
+    }
+    ${entities.secondary} ||--o{ ${entities.main} : contains
+    ${entities.secondary} {
+        string id PK
+        string name
+        string description
+    }`;
+      
+      return { productType, mindmapSections, erDiagram, sections, entities };
+    };
+    
+    // Генерируем IA на основе контекста
+    const iaContext = generateContextualIA();
+    const cleanName = idea.name.replace(/\*\*/g, '').replace(/["«»]/g, '').trim();
+    
+    // === ОПРЕДЕЛЯЕМ ТИП ЗАПРОСА ПО КЛЮЧЕВЫМ СЛОВАМ ИЗ ПРОМПТОВ ===
+    // IA prompt содержит: "Создай Информационную архитектуру"
+    // Userflow prompt содержит: "Создай детальные пользовательские сценарии"
+    
+    const isIARequest = lowerMessage.includes('информационную архитектуру');
+    const isUserflowRequest = lowerMessage.includes('детальные пользовательские сценарии');
+    
+    // USERFLOW - если в промпте есть ключевые слова userflow
+    if (isUserflowRequest) {
+      return `## 🔄 Userflow сценарии для "${idea.name}"
+
+### 1. 🎯 Основной Userflow (Happy Path)
+
+\`\`\`mermaid
+flowchart TD
+    A[Старт] --> B[Открытие приложения]
+    B --> C[Просмотр главного экрана]
+    C --> D{Выбор действия}
+    D --> E[${idea.functions[0]?.substring(0, 30) || 'Основная функция'}]
+    E --> F[Получение результата]
+    F --> G[Удовлетворение потребности]
+    G --> H[Возврат или завершение]
+    style A fill:#f5b942,color:#000
+    style H fill:#22c55e,color:#fff
+\`\`\`
+
+**Описание:** Пользователь открывает приложение, выбирает нужную функцию и получает результат за минимальное количество шагов.
+
+---
+
+### 2. 🔄 Альтернативный Userflow
+
+\`\`\`mermaid
+flowchart TD
+    A[Старт] --> B[Открытие приложения]
+    B --> C[Поиск через поиск/фильтры]
+    C --> D{Результаты найдены?}
+    D -->|Да| E[Выбор из результатов]
+    D -->|Нет| F[Расширение критериев]
+    F --> C
+    E --> G[Действие с выбранным]
+    G --> H[Результат]
+    style A fill:#f5b942,color:#000
+    style H fill:#22c55e,color:#fff
+\`\`\`
+
+**Описание:** Пользователь использует поиск или фильтры для нахождения нужного объекта перед выполнением основного действия.
+
+---
+
+### 3. ⚡ Оптимальный Userflow (Оптимистичный)
+
+\`\`\`mermaid
+flowchart TD
+    A[Старт] --> B[Быстрое действие с главного экрана]
+    B --> C[Мгновенный результат]
+    C --> D[Готово!]
+    style A fill:#f5b942,color:#000
+    style D fill:#22c55e,color:#fff
+\`\`\`
+
+**Описание:** Опытный пользователь или при идеальных условиях - действие выполняется в 1-2 клика через виджеты, шорткаты или избранное.
+
+---
+
+### 4. 📱 Описание ключевых экранов
+
+| Экран | Цель | Ключевые элементы | Действия пользователя |
+|-------|------|-------------------|----------------------|
+| **Главный** | Быстрый доступ к функциям | Кнопки действий, виджеты, избранное | Выбор функции, навигация |
+| **${idea.functions[0]?.substring(0, 20) || 'Функция 1'}** | Выполнение основной задачи | Форма ввода, результаты | Ввод данных, подтверждение |
+| **Результаты** | Просмотр результата | Детали, действия, шеринг | Сохранение, повтор, выход |
+| **Профиль** | Управление аккаунтом | Настройки, история | Редактирование, выход |`;
+    }
+    
+    // IA - ИСПОЛЬЗУЕМ КОНТЕКСТНУЮ IA
+    
+    // Проверяем, это запрос на МОДИФИКАЦИЮ существующей IA?
+    const isModificationRequest = message.includes('Текущ') && message.includes('информационн') && message.includes('архитектур') && message.includes('Запрос пользователя на изменение');
+    
+    if (isModificationRequest) {
+      // Извлекаем текущую IA из сообщения
+      const currentIaMatch = message.match(/Текущ[a-яё]* информационн[a-яё]* архитектур[a-яё]*:\s*([\s\S]*?)---/);
+      const userRequestMatch = message.match(/Запрос пользователя на изменение:\s*([^\n]+(?:\n[^\n#]+)*?)(?=---|$)/i);
+      
+      const currentIa = currentIaMatch ? currentIaMatch[1].trim() : '';
+      const userRequest = userRequestMatch ? userRequestMatch[1].trim() : '';
+      
+      console.log(`[IA Modification] User request: "${userRequest.substring(0, 100)}..."`);
+      console.log(`[IA Modification] Current IA length: ${currentIa.length}`);
+      
+      // Парсим текущую Mermaid схему
+      const mermaidMatch = currentIa.match(/```mermaid[\s\S]*?```/);
+      let currentMermaid = mermaidMatch ? mermaidMatch[0] : '';
+      
+      console.log(`[IA Modification] Found Mermaid: ${currentMermaid ? 'yes' : 'no'}, length: ${currentMermaid.length}`);
+      
+      // Применяем изменения на основе запроса
+      const lowerRequest = userRequest.toLowerCase();
+      
+      // Добавление страницы
+      if (lowerRequest.includes('добав') || lowerRequest.includes('создай') || lowerRequest.includes('новая страниц')) {
+        const pageNameMatch = userRequest.match(/добав[а-яё]*\s+(?:страниц[а-яё]*\s+)?["«]?([^"»\n]+)["»]?/i) ||
+                              userRequest.match(/создай\s+(?:страниц[а-яё]*\s+)?["«]?([^"»\n]+)["»]?/i) ||
+                              userRequest.match(/новая\s+страниц[а-яё]*\s+["«]?([^"»\n]+)["»]?/i);
+        const newPageName = pageNameMatch ? pageNameMatch[1].trim() : 'Новая страница';
+        
+        // Добавляем новую страницу в Mermaid
+        const existingPages = currentMermaid.match(/subgraph p\d+_sub/g) || [];
+        const newPageIndex = existingPages.length;
+        const newPageId = `p${newPageIndex}`;
+        const pageSlug = newPageName.toLowerCase().replace(/[^a-zа-яё0-9]/gi, '-').replace(/-+/g, '-');
+        
+        const newPageMermaid = `
+    subgraph ${newPageId}_sub ["📄 ${newPageName}"]
+        ${newPageId}_url["🔗 /${pageSlug}"]
+        ${newPageId}_d0["Контент страницы"]
+        ${newPageId}_d1["Действия пользователя"]
+    end
+
+    root --> ${newPageId}_sub`;
+        
+        // Вставляем новую страницу перед закрывающим ```
+        if (currentMermaid) {
+          currentMermaid = currentMermaid.replace(/```$/, newPageMermaid + '\n```');
+        }
+        
+        console.log(`[IA Modification] Added page: ${newPageName}`);
+      }
+      
+      // Удаление страницы
+      if (lowerRequest.includes('удали') || lowerRequest.includes('убери') || lowerRequest.includes('исключи')) {
+        const pageToRemoveMatch = userRequest.match(/(?:удали|убери|исключи)\s+(?:страниц[а-яё]*\s+)?["«]?([^"»\n]+)["»]?/i);
+        if (pageToRemoveMatch) {
+          const pageName = pageToRemoveMatch[1].trim();
+          // Удаляем subgraph с этим именем (более гибкий паттерн)
+          const escapedName = pageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const removePattern = new RegExp(`\\s*subgraph p\\d+_sub \\["[^"]*${escapedName}[^"]*"\\][\\s\\S]*?end\\s*`, 'gi');
+          currentMermaid = currentMermaid.replace(removePattern, '\n');
+          // Удаляем связи с этой страницей
+          currentMermaid = currentMermaid.replace(new RegExp(`\\s*root --> p\\d+_sub\\s*`, 'g'), '\n    ');
+          console.log(`[IA Modification] Removed page: ${pageName}`);
+        }
+      }
+      
+      // Переименование страницы
+      if (lowerRequest.includes('переименуй') || lowerRequest.includes('назови')) {
+        const renameMatch = userRequest.match(/(?:переименуй|назови)\s+(?:страниц[а-яё]*\s+)?["«]?([^"»\n]+)["»]?\s+(?:в\s+|на\s+)?["«]?([^"»\n]+)["»]?/i);
+        if (renameMatch) {
+          const oldName = renameMatch[1].trim();
+          const newName = renameMatch[2].trim();
+          currentMermaid = currentMermaid.replace(
+            new RegExp(`(subgraph p\\d+_sub \\["📄 )${oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}("\\])`, 'i'),
+            `$1${newName}$2`
+          );
+          console.log(`[IA Modification] Renamed: ${oldName} -> ${newName}`);
+        }
+      }
+      
+      // Извлекаем описание страниц из текущей IA для обновления текстовой части
+      const pagesSectionMatch = currentIa.match(/### 📄 Детальное описание страниц[\s\S]*?(?=###|##|$)/);
+      const pagesDescription = pagesSectionMatch ? pagesSectionMatch[0] : '';
+      
+      return `## 🏗️ Информационная архитектура для "${cleanName}" (обновлено)
+
+### 📋 Применённые изменения
+
+**Запрос:** ${userRequest}
+
+---
+
+### 🗺️ Обновлённая структура продукта (Mermaid)
+
+${currentMermaid || '```mermaid\nflowchart TD\n    root["' + cleanName + '"]\n```'}
+
+---
+
+${pagesDescription}
+
+---
+
+### 💡 Изменения применены
+
+Схема информационной архитектуры обновлена. Можете продолжить уточнение или перейти к следующему этапу.`;
+    }
+    
+    // Обычная генерация новой IA
+    
+    // Анализируем контекст идеи для генерации IA
+    const analyzeIdeaForIA = () => {
+      const fullContext = `${idea.name} ${idea.description} ${idea.functions.join(' ')} ${sourceAnalysis.useCases.join(' ')} ${sourceAnalysis.userTypes}`;
+      const lowerContext = fullContext.toLowerCase();
+      
+      // Определяем тип продукта и ключевые сущности
+      let productDomain = 'universal';
+      let mainEntity = 'Элемент';
+      let entityFields: string[] = [];
+      let pageTypes: { name: string; purpose: string; dataElements: string[] }[] = [];
+      
+      // Анализ домена на основе контекста
+      if (lowerContext.includes('магазин') || lowerContext.includes('товар') || lowerContext.includes('каталог') || lowerContext.includes('заказ')) {
+        productDomain = 'ecommerce';
+        mainEntity = 'Товар';
+        entityFields = ['Название', 'Цена', 'Категория', 'Наличие', 'Изображение', 'Описание'];
+        pageTypes = [
+          { name: 'Каталог', purpose: 'Просмотр и поиск товаров', dataElements: ['Список товаров', 'Фильтры', 'Сортировка', 'Категории'] },
+          { name: 'Карточка товара', purpose: 'Детальная информация о товаре', dataElements: ['Фото/видео', 'Характеристики', 'Цена', 'Кнопка заказа', 'Отзывы'] },
+          { name: 'Корзина', purpose: 'Управление выбранными товарами', dataElements: ['Список позиций', 'Итого', 'Промокод', 'Оформить заказ'] }
+        ];
+      } else if (lowerContext.includes('запис') || lowerContext.includes('брон') || lowerContext.includes('слот') || lowerContext.includes('услуг')) {
+        productDomain = 'booking';
+        mainEntity = 'Услуга';
+        entityFields = ['Название', 'Длительность', 'Цена', 'Мастер', 'Доступные слоты'];
+        pageTypes = [
+          { name: 'Услуги', purpose: 'Выбор услуги для записи', dataElements: ['Категории услуг', 'Список услуг', 'Цены', 'Длительность'] },
+          { name: 'Выбор времени', purpose: 'Выбор слота и мастера', dataElements: ['Календарь', 'Доступные слоты', 'Мастера', 'Условия'] },
+          { name: 'Подтверждение', purpose: 'Финализация записи', dataElements: ['Контактные данные', 'Итого', 'Оплата', 'Подтверждение'] }
+        ];
+      } else if (lowerContext.includes('курс') || lowerContext.includes('урок') || lowerContext.includes('обучен') || lowerContext.includes('образован')) {
+        productDomain = 'education';
+        mainEntity = 'Курс';
+        entityFields = ['Название', 'Длительность', 'Уроки', 'Прогресс', 'Преподаватель'];
+        pageTypes = [
+          { name: 'Каталог курсов', purpose: 'Просмотр доступных курсов', dataElements: ['Карточки курсов', 'Фильтры по теме', 'Уровень', 'Длительность'] },
+          { name: 'Страница курса', purpose: 'Детали курса и уроки', dataElements: ['Описание', 'Программа', 'Уроки', 'Прогресс', 'Материалы'] },
+          { name: 'Урок', purpose: 'Просмотр контента урока', dataElements: ['Видео', 'Текст', 'Задания', 'Навигация'] }
+        ];
+      } else if (lowerContext.includes('задач') || lowerContext.includes('проект') || lowerContext.includes('kanban') || lowerContext.includes('доска')) {
+        productDomain = 'task';
+        mainEntity = 'Задача';
+        entityFields = ['Название', 'Статус', 'Приоритет', 'Исполнитель', 'Дедлайн'];
+        pageTypes = [
+          { name: 'Доска', purpose: 'Управление задачами', dataElements: ['Колонки статусов', 'Карточки задач', 'Фильтры', 'Перетаскивание'] },
+          { name: 'Задача', purpose: 'Детали задачи', dataElements: ['Описание', 'Подзадачи', 'Комментарии', 'Файлы', 'История'] },
+          { name: 'Проект', purpose: 'Обзор проекта', dataElements: ['Прогресс', 'Участники', 'Статистика', 'Настройки'] }
+        ];
+      } else if (lowerContext.includes('чат') || lowerContext.includes('сообщен') || lowerContext.includes('мессендж')) {
+        productDomain = 'messenger';
+        mainEntity = 'Сообщение';
+        entityFields = ['Текст', 'Отправитель', 'Время', 'Статус', 'Вложения'];
+        pageTypes = [
+          { name: 'Чаты', purpose: 'Список диалогов', dataElements: ['Список чатов', 'Последние сообщения', 'Непрочитанные', 'Поиск'] },
+          { name: 'Диалог', purpose: 'Обмен сообщениями', dataElements: ['История сообщений', 'Поле ввода', 'Вложения', 'Инфо о собеседнике'] },
+          { name: 'Контакты', purpose: 'Управление контактами', dataElements: ['Список контактов', 'Группы', 'Новый чат', 'Приглашения'] }
+        ];
+      } else {
+        // Универсальный продукт - генерируем страницы на основе функций
+        productDomain = 'universal';
+        mainEntity = 'Элемент';
+        entityFields = ['Название', 'Описание', 'Статус', 'Дата создания'];
+        pageTypes = idea.functions.slice(0, 3).map((func, idx) => {
+          const funcName = func.replace(/^\d+\.\s*/, '').substring(0, 25);
+          return {
+            name: funcName,
+            purpose: `Выполнение функции: ${funcName}`,
+            dataElements: ['Список', 'Форма', 'Детали', 'Действия']
+          };
+        });
+      }
+      
+      return { productDomain, mainEntity, entityFields, pageTypes };
+    };
+    
+    const iaAnalysis = analyzeIdeaForIA();
+    
+    // Генерируем страницы на основе анализа идеи
+    const generatePagesFromIdea = () => {
+      const pages: { 
+        name: string; 
+        url: string; 
+        purpose: string;
+        dataElements: string[];
+        connections: string[];
+      }[] = [];
+      
+      // Главная страница - точка входа
+      pages.push({
+        name: 'Главная',
+        url: '/',
+        purpose: 'Точка входа, обзор продукта',
+        dataElements: [
+          'Название продукта',
+          'Ключевое действие',
+          'Обзор функций',
+          'Уведомления'
+        ],
+        connections: []
+      });
+      
+      // Генерируем страницы на основе функций идеи
+      idea.functions.slice(0, 5).forEach((func, idx) => {
+        const funcClean = func.replace(/^\d+\.\s*/, '');
+        const funcName = funcClean.substring(0, 35);
+        const urlSlug = funcName.toLowerCase()
+          .replace(/[^a-zа-яё0-9]/gi, '-')
+          .replace(/-+/g, '-')
+          .substring(0, 25);
+        
+        // Определяем элементы данных на основе контекста функции
+        const dataElements: string[] = [];
+        const lowerFunc = funcClean.toLowerCase();
+        
+        if (lowerFunc.includes('каталог') || lowerFunc.includes('список') || lowerFunc.includes('просмотр')) {
+          dataElements.push('Карточки элементов', 'Фильтры', 'Сортировка', 'Пагинация');
+        } else if (lowerFunc.includes('поиск') || lowerFunc.includes('найти')) {
+          dataElements.push('Строка поиска', 'Результаты', 'Фильтры', 'История поиска');
+        } else if (lowerFunc.includes('заказ') || lowerFunc.includes('покупк') || lowerFunc.includes('оформл')) {
+          dataElements.push('Форма данных', 'Сводка заказа', 'Оплата', 'Подтверждение');
+        } else if (lowerFunc.includes('профил') || lowerFunc.includes('настройк') || lowerFunc.includes('аккаунт')) {
+          dataElements.push('Данные пользователя', 'Настройки', 'История', 'Выход');
+        } else if (lowerFunc.includes('добав') || lowerFunc.includes('созда') || lowerFunc.includes('нов')) {
+          dataElements.push('Форма создания', 'Поля ввода', 'Валидация', 'Кнопка сохранения');
+        } else {
+          // Дефолтные элементы на основе типа страницы из анализа
+          if (iaAnalysis.pageTypes[idx]) {
+            dataElements.push(...iaAnalysis.pageTypes[idx].dataElements.slice(0, 4));
+          } else {
+            dataElements.push('Заголовок', 'Основной контент', 'Действия', 'Навигация');
+          }
+        }
+        
+        pages.push({
+          name: funcName,
+          url: `/${urlSlug || `page-${idx + 1}`}`,
+          purpose: funcClean.length > 60 ? funcClean.substring(0, 60) + '...' : funcClean,
+          dataElements,
+          connections: idx > 0 ? [pages[0].name] : []
+        });
+      });
+      
+      // Профиль/настройки если не было в функциях
+      const hasProfile = idea.functions.some(f => 
+        f.toLowerCase().includes('профил') || 
+        f.toLowerCase().includes('настройк') ||
+        f.toLowerCase().includes('аккаунт')
+      );
+      
+      if (!hasProfile) {
+        pages.push({
+          name: 'Профиль',
+          url: '/profile',
+          purpose: 'Управление аккаунтом пользователя',
+          dataElements: ['Аватар', 'Имя', 'Email', 'Настройки', 'История действий'],
+          connections: [pages[0].name]
+        });
+      }
+      
+      return pages;
+    };
+    
+    const pages = generatePagesFromIdea();
+    
+    // Генерируем обогащённую Mermaid-схему с данными
+    const generateEnrichedMermaid = () => {
+      const lines: string[] = [];
+      lines.push('flowchart TD');
+      lines.push('');
+      
+      // Корневой узел
+      lines.push(`    root["${cleanName}<br/><small>${idea.description.substring(0, 50)}...</small>"]`);
+      lines.push('');
+      
+      // Генерируем узлы для каждой страницы с данными
+      pages.forEach((page, idx) => {
+        const nodeId = `p${idx}`;
+        const pageNum = idx + 1;
+        
+        // Страница как subgraph с данными
+        lines.push(`    subgraph ${nodeId}_sub ["📄 ${page.name}"]`);
+        lines.push(`        ${nodeId}_url["🔗 ${page.url}"]`);
+        
+        // Добавляем элементы данных
+        page.dataElements.slice(0, 4).forEach((elem, eIdx) => {
+          const elemId = `${nodeId}_d${eIdx}`;
+          const shortElem = elem.length > 20 ? elem.substring(0, 20) + '...' : elem;
+          lines.push(`        ${elemId}["${shortElem}"]`);
+        });
+        
+        lines.push(`    end`);
+        lines.push('');
+        
+        // Связь от корня к странице
+        lines.push(`    root --> ${nodeId}_sub`);
+      });
+      
+      // Добавляем связи между страницами на основе логики
+      lines.push('');
+      lines.push('    %% Связи между страницами');
+      
+      // Главная связана со всеми основными страницами
+      pages.slice(1, 4).forEach((page, idx) => {
+        const fromNode = 'p0_sub';
+        const toNode = `p${idx + 1}_sub`;
+        lines.push(`    ${fromNode} -.->|"навигация"| ${toNode}`);
+      });
+      
+      // Стили
+      lines.push('');
+      lines.push('    %% Стили');
+      lines.push('    classDef root fill:#f5b942,stroke:#d97706,stroke-width:3px,color:#000');
+      lines.push('    classDef page fill:#1e3a5f,stroke:#2563eb,color:#fff');
+      lines.push('    classDef data fill:#0f172a,stroke:#334155,color:#94a3b8');
+      lines.push('');
+      lines.push('    class root root');
+      
+      return lines.join('\n');
+    };
+    
+    const mermaidCode = generateEnrichedMermaid();
+
+    return `## 🏗️ Информационная архитектура для "${cleanName}"
+
+### 📋 Контекст продукта
+
+**Описание:** ${idea.description}
+
+**Целевая аудитория:** ${sourceAnalysis.userTypes}
+
+**Ключевые функции:**
+${idea.functions.slice(0, 5).map((f, i) => `${i + 1}. ${f}`).join('\n')}
+
+---
+
+### 🗺️ Структура продукта (Mermaid)
+
+\`\`\`mermaid
+${mermaidCode}
+\`\`\`
+
+---
+
+### 📄 Детальное описание страниц и данных
+
+${pages.map((page, idx) => `#### ${idx + 1}. ${page.name}
+
+**URL:** \`${page.url}\`
+
+**Цель страницы:** ${page.purpose}
+
+**Элементы данных на странице:**
+${page.dataElements.map((d, i) => `  ${i + 1}. **${d}** — данные для отображения/ввода`).join('\n')}
+
+**Переходы:** ${page.connections.length > 0 ? page.connections.join(', ') : 'Из главного меню'}
+
+---`).join('\n')}
+
+### 🗃️ Таксономия сущностей
+
+**Основная сущность:** ${iaAnalysis.mainEntity}
+
+**Атрибуты сущности:**
+${iaAnalysis.entityFields.map((f, i) => `  ${i + 1}. \`${f}\``).join('\n')}
+
+\`\`\`mermaid
+erDiagram
+    USER ||--o{ ${iaAnalysis.mainEntity.toUpperCase().replace(/[^A-Z]/g, 'E')} : создает
+    USER {
+        string id PK
+        string email
+        string name
+        datetime created_at
+    }
+    ${iaAnalysis.mainEntity.toUpperCase().replace(/[^A-Z]/g, 'E')} {
+        string id PK
+        ${iaAnalysis.entityFields.slice(0, 4).map(f => `string ${f.toLowerCase().replace(/[^a-zа-яё]/gi, '_')}`).join('\n        ')}
+    }
+\`\`\`
+
+---
+
+### 🧭 Принципы навигации
+
+1. **Быстрый старт** — ${idea.functions[0]?.substring(0, 50) || 'ключевая функция'} доступна с главной
+2. **Контекст** — пользователь всегда знает, где находится
+3. **Обратная связь** — подтверждение всех действий
+4. **Минимум шагов** — не более 3 кликов до цели
+
+---
+
+### 💡 Рекомендации по IA для "${cleanName}"
+
+- **Структура:** ${pages.length} ключевых страниц
+- **Глубина:** максимум 2 уровня вложенности
+- **Поиск:** по ${iaAnalysis.mainEntity.toLowerCase()}ам и контенту
+- **Связи:** логические переходы между ${pages.slice(0, 3).map(p => p.name).join(', ')}`;
+  }
+
+
+  // === USERFLOW ===
+  // ПРАВИЛО: Userflow создаётся ТОЛЬКО из контекста идеи и IA.
+  // Никаких шаблонов - только реальные данные из предыдущих этапов.
+  if (agentType === 'userflow_researcher') {
+    console.log('[Userflow] Генерация ТОЛЬКО из контекста идеи и IA');
+    
+    // Извлекаем IA из сообщения
+    const extractIA = (): { pages: { name: string; purpose: string }[] } => {
+      const pages: { name: string; purpose: string }[] = [];
+      
+      // Ищем раздел с описанием страниц
+      const pageMatches = message.matchAll(/####\s*\d+\.\s*(.+)\n\n\*\*URL:\*\*\s*`([^`]+)`\n\n\*\*Цель страницы:\*\*\s*(.+?)(?:\n\n\*\*Элементы|$)/gi);
+      for (const match of pageMatches) {
+        pages.push({
+          name: match[1].trim(),
+          purpose: match[3].trim()
+        });
+      }
+      
+      // Альтернативный паттерн - через subgraph в mermaid
+      if (pages.length === 0) {
+        const subgraphMatches = message.matchAll(/subgraph\s+\w+_sub\s+\["📄?\s*([^"]+)"\]/gi);
+        for (const match of subgraphMatches) {
+          pages.push({
+            name: match[1].trim(),
+            purpose: ''
+          });
+        }
+      }
+      
+      console.log(`[Userflow] Извлечено страниц из IA: ${pages.length}`);
+      return { pages };
+    };
+    
+    // Извлекаем аудиторию из идеи
+    const extractAudience = (): string => {
+      const audienceMatch = message.match(/аудитори[яи]:?\s*([^\n]+)/i) ||
+                           message.match(/целев[а-яё]+\s*аудитори[яи]:?\s*([^\n]+)/i) ||
+                           message.match(/для\s+(кого|каких):?\s*([^\n]+)/i);
+      if (audienceMatch) return audienceMatch[1] || audienceMatch[2] || 'Пользователи';
+      return 'Пользователи продукта';
+    };
+    
+    const iaData = extractIA();
+    const audience = extractAudience();
+    
+    // Строим шаги ТОЛЬКО из функций идеи и страниц IA
+    const buildStepsFromContext = () => {
+      const steps: { step: string; action: string }[] = [];
+      steps.push({ step: 'Старт', action: 'Открытие продукта' });
+      
+      for (const func of idea.functions.slice(0, 4)) {
+        const cleanFunc = func.replace(/^\d+\.\s*/, '').trim();
+        if (cleanFunc.length > 5) {
+          steps.push({ 
+            step: cleanFunc.substring(0, 40), 
+            action: `Выполнение: ${cleanFunc.substring(0, 50)}` 
+          });
+        }
+      }
+      
+      if (iaData.pages.length > 0) {
+        for (const page of iaData.pages.slice(0, 3)) {
+          const existingStep = steps.find(s => 
+            s.step.toLowerCase().includes(page.name.toLowerCase()) ||
+            page.name.toLowerCase().includes(s.step.toLowerCase().substring(0, 15))
+          );
+          if (!existingStep && page.name.length > 2) {
+            steps.push({
+              step: page.name,
+              action: page.purpose || `Переход на ${page.name}`
+            });
+          }
+        }
+      }
+      
+      steps.push({ step: 'Результат', action: 'Достижение цели' });
+      return steps;
+    };
+    
+    // Генерируем User Stories из контекста
+    const generateUserStories = (): { role: string; action: string; benefit: string }[] => {
+      const stories: { role: string; action: string; benefit: string }[] = [];
+      
+      // Из каждой функции идеи создаём user story
+      for (const func of idea.functions.slice(0, 5)) {
+        const cleanFunc = func.replace(/^\d+\.\s*/, '').trim();
+        if (cleanFunc.length > 5) {
+          stories.push({
+            role: audience,
+            action: cleanFunc.toLowerCase().startsWith('хочу') || cleanFunc.toLowerCase().startsWith('могу')
+              ? cleanFunc
+              : `смогу ${cleanFunc.toLowerCase()}`,
+            benefit: idea.description.substring(0, 60) || 'решить свою задачу'
+          });
+        }
+      }
+      
+      return stories;
+    };
+    
+    // Генерируем JTBD из контекста
+    const generateJTBD = (): { situation: string; motivation: string; outcome: string }[] => {
+      const jobs: { situation: string; motivation: string; outcome: string }[] = [];
+      
+      // JTBD 1 - на основе первой функции
+      if (idea.functions[0]) {
+        const func = idea.functions[0].replace(/^\d+\.\s*/, '').trim();
+        jobs.push({
+          situation: `Когда мне нужно ${func.toLowerCase().substring(0, 40)}`,
+          motivation: `я хочу найти удобный способ сделать это в "${idea.name}"`,
+          outcome: `чтобы ${idea.description.substring(0, 50) || 'достичь своей цели'}`
+        });
+      }
+      
+      // JTBD 2 - на основе второй функции
+      if (idea.functions[1]) {
+        const func = idea.functions[1].replace(/^\d+\.\s*/, '').trim();
+        jobs.push({
+          situation: `Когда я сталкиваюсь с задачей: ${func.toLowerCase().substring(0, 35)}`,
+          motivation: `я хочу использовать "${idea.name}" для этого`,
+          outcome: 'чтобы сэкономить время и получить качественный результат'
+        });
+      }
+      
+      // JTBD 3 - контекстный
+      jobs.push({
+        situation: `Когда я ищу решение в области "${idea.name}"`,
+        motivation: 'я хочу найти надёжный инструмент',
+        outcome: `чтобы ${idea.description.substring(0, 40) || 'эффективно решить свою задачу'}`
+      });
+      
+      return jobs;
+    };
+    
+    const mainSteps = buildStepsFromContext();
+    const userStories = generateUserStories();
+    const jtbd = generateJTBD();
+    
+    // Генерируем Mermaid
+    let mermaidCode = 'flowchart TD\n';
+    mainSteps.forEach((step, idx) => {
+      const nodeId = idx === 0 ? 'A' : idx === mainSteps.length - 1 ? 'Z' : `S${idx}`;
+      const nextNode = idx === mainSteps.length - 2 ? 'Z' : idx === mainSteps.length - 1 ? null : `S${idx + 1}`;
+      const emoji = idx === 0 ? '🚀' : idx === mainSteps.length - 1 ? '✅' : '';
+      
+      mermaidCode += `    ${nodeId}[${emoji}${step.step}]\n`;
+      if (nextNode) {
+        mermaidCode += `    ${nodeId} --> ${nextNode}\n`;
+      }
+    });
+    mermaidCode += '    style A fill:#f5b942,color:#000\n    style Z fill:#22c55e,color:#fff';
+    
+    const screensTable = iaData.pages.length > 0 
+      ? iaData.pages.slice(0, 5).map(p => `| **${p.name}** | ${p.purpose || 'Страница приложения'} |`).join('\n')
+      : idea.functions.slice(0, 3).map(f => `| **${f.substring(0, 25)}** | Выполнение функции |`).join('\n');
+    
+    return `## 🔄 Пользовательские сценарии для "${idea.name}"
+
+### 📋 Контекст из предыдущих этапов
+
+**Из Идеи:** ${idea.name} — ${idea.description.substring(0, 80)}
+**Функций:** ${idea.functions.length} | **Страниц IA:** ${iaData.pages.length}
+
+---
+
+### 1. 📖 User Stories
+
+${userStories.map((s, i) => `**US-${i + 1}:** Как ${s.role}, я хочу ${s.action}, чтобы ${s.benefit}.`).join('\n\n')}
+
+---
+
+### 2. 🎯 Jobs To Be Done (JTBD)
+
+${jtbd.map((j, i) => `**JTBD-${i + 1}:**
+- **Ситуация:** ${j.situation}
+- **Мотивация:** ${j.motivation}
+- **Ожидаемый результат:** ${j.outcome}`).join('\n\n')}
+
+---
+
+### 3. 🔄 Основной сценарий (Userflow)
+
+\`\`\`mermaid
+${mermaidCode}
+\`\`\`
+
+**Шаги:**
+${mainSteps.map((s, i) => `${i + 1}. **${s.step}** — ${s.action}`).join('\n')}
+
+---
+
+### 4. 📱 Экраны из IA
+
+| Экран | Цель |
+|-------|------|
+${screensTable}
+
+---
+
+### 5. 🔗 Переходы между экранами
+
+${mainSteps.slice(0, -1).map((s, i) => `${s.step} → ${mainSteps[i + 1]?.step || 'Результат'}`).join('\n')}`;
+  }
+
+
+  // === ПРОТОТИП ===
+  if (agentType === 'prototyper') {
+    // Detect product type for better defaults
+    const productType = detectProductType(message + ' ' + idea.name + ' ' + idea.description);
+    
+    // Clean product name from markdown
+    const productName = idea.name.replace(/\*\*/g, '').replace(/["«»]/g, '').trim();
+    
+    // Smart function extraction with null checks
+    let func1 = idea.functions[0] || 'Основная функция';
+    let func2 = idea.functions[1] || 'Дополнительные возможности';
+    let func3 = idea.functions[2] || 'Настройки';
+    
+    // Product-type specific defaults
+    if (!func1 || func1 === 'Основная функция продукта') {
+      const defaultFunctions: Record<string, string[]> = {
+        booking: ['Онлайн-запись на услугу', 'Календарь свободных слотов', 'SMS-напоминания'],
+        ats: ['Виртуальная АТС', 'Запись звонков', 'Аналитика'],
+        dashboard: ['Виджеты и графики', 'Экспорт отчётов', 'Real-time данные'],
+        crm: ['Управление сделками', 'Контакт-профили', 'Автоматизация'],
+        ecommerce: ['Каталог товаров', 'Корзина и оплата', 'Отслеживание заказа'],
+        taxi: ['Заказ поездки', 'Отслеживание машины', 'Оплата в приложении'],
+        messenger: ['Чаты и звонки', 'Групповые беседы', 'Шаринг файлов'],
+        task: ['Kanban-доска', 'Задачи и дедлайны', 'Командная работа'],
+        hr: ['Вакансии и отклики', 'Кандидаты', 'Онбординг'],
+        fintech: ['Платежи и переводы', 'Баланс и выписки', 'Бюджетирование'],
+        education: ['Курсы и уроки', 'Прогресс обучения', 'Сертификаты'],
+        health: ['Запись к врачу', 'Медицинская карта', 'Телемедицина'],
+        logistics: ['Отслеживание груза', 'Маршруты доставки', 'Документы'],
+        default: ['Основная функция', 'Дополнительные возможности', 'Настройки']
+      };
+      
+      const funcs = defaultFunctions[productType.id] || defaultFunctions.default;
+      func1 = funcs[0];
+      func2 = funcs[1];
+      func3 = funcs[2];
+    }
+    
+    // Extract value proposition from description
+    const valueProp = idea.description.length > 100 
+      ? idea.description.substring(0, 100) + '...'
+      : idea.description || 'Инновационное решение для вашего бизнеса';
+    
+    console.log(`[Fallback Prototype] Product: "${productName}", Type: ${productType.id}, Functions: [${func1}, ${func2}, ${func3}]`);
+    
+    return `## 🎨 Интерактивный прототип "${productName}"
+
+\`\`\`html
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>${productName}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #000; color: #fff; min-height: 100vh; overflow-x: hidden; }
+        
+        /* Screen system */
+        .screen { display: none; min-height: 100vh; position: relative; }
+        .screen.active { display: flex; flex-direction: column; }
+        
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+        @keyframes glow { 0%, 100% { box-shadow: 0 0 20px rgba(250, 204, 21, 0.3); } 50% { box-shadow: 0 0 35px rgba(250, 204, 21, 0.6); } }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes scanline { 0% { top: -10%; } 100% { top: 110%; } }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+        
+        .fade-in { animation: fadeIn 0.4s ease-out; }
+        .animate-float { animation: float 3s ease-in-out infinite; }
+        .animate-glow { animation: glow 2s ease-in-out infinite; }
+        .animate-pulse { animation: pulse 2s ease-in-out infinite; }
+        
+        /* Colors */
+        :root {
+            --bg: #000000;
+            --bg-card: #0A0A0A;
+            --bg-elevated: #141414;
+            --border: #1A1A1A;
+            --text: #FFFFFF;
+            --text-secondary: #A3A3A3;
+            --text-muted: #737373;
+            --accent: #FACC15;
+            --success: #22C55E;
+            --error: #EF4444;
+        }
+        
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .gradient-text { background: linear-gradient(90deg, #FACC15, #FEF08A, #FACC15); background-size: 200% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 3s linear infinite; }
+        
+        /* Grid background */
+        .grid-bg { background-image: linear-gradient(rgba(250, 204, 21, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(250, 204, 21, 0.03) 1px, transparent 1px); background-size: 50px 50px; }
+        
+        /* Scanline effect */
+        .scanline { position: fixed; left: 0; right: 0; height: 4px; background: linear-gradient(to bottom, transparent, rgba(250, 204, 21, 0.15), transparent); animation: scanline 6s linear infinite; pointer-events: none; z-index: 9999; }
+        
+        /* Buttons */
+        .btn-primary { 
+            padding: 14px 32px; border-radius: 12px; border: none; 
+            background: var(--accent); color: #000; font-weight: 700; font-size: 16px; 
+            cursor: pointer; transition: all 0.3s;
+        }
+        .btn-primary:hover { transform: scale(1.02); }
+        
+        .btn-secondary { 
+            padding: 14px 32px; border-radius: 12px; border: 1px solid var(--border); 
+            background: transparent; color: var(--text); font-weight: 600; font-size: 16px; 
+            cursor: pointer; transition: all 0.3s;
+        }
+        .btn-secondary:hover { border-color: var(--accent); }
+        
+        /* Cards */
+        .card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            transition: all 0.3s;
+            position: relative;
+        }
+        .card:hover { border-color: var(--accent); }
+        .card::before { content: ''; position: absolute; inset: -1px; background: linear-gradient(45deg, var(--accent), transparent, var(--accent)); border-radius: inherit; z-index: -1; opacity: 0; transition: opacity 0.3s; }
+        .card:hover::before { opacity: 1; }
+        
+        /* Input */
+        .input {
+            width: 100%; padding: 14px 16px; border-radius: 12px;
+            border: 1px solid var(--border); background: var(--bg-card);
+            color: var(--text); font-size: 16px; font-family: inherit;
+            transition: all 0.2s;
+        }
+        .input:focus { outline: none; border-color: var(--accent); }
+        .input::placeholder { color: var(--text-muted); }
+        
+        /* SPLASH SCREEN */
+        #splash { align-items: center; justify-content: center; text-align: center; padding: 40px; }
+        .logo-large { 
+            width: 100px; height: 100px; border-radius: 24px; 
+            background: linear-gradient(135deg, var(--accent), #FDE047);
+            display: flex; align-items: center; justify-content: center; 
+            font-size: 40px; font-weight: 900; color: #000; 
+            margin: 0 auto 32px;
+        }
+        .splash-title { font-size: 36px; font-weight: 900; margin-bottom: 16px; letter-spacing: -1px; }
+        .splash-desc { color: var(--text-secondary); max-width: 300px; margin: 0 auto 40px; line-height: 1.6; }
+        
+        /* ONBOARDING */
+        #onboarding { padding: 60px 24px 40px; }
+        .progress-bar { width: 100%; height: 4px; background: var(--border); border-radius: 2px; margin-bottom: 48px; }
+        .progress-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; }
+        .step { text-align: center; padding: 40px 0; }
+        .step-icon { font-size: 64px; margin-bottom: 24px; }
+        .step-title { font-size: 24px; font-weight: 800; margin-bottom: 12px; }
+        .step-desc { color: var(--text-secondary); }
+        .onboarding-buttons { display: flex; gap: 12px; margin-top: auto; padding-top: 40px; }
+        
+        /* MAIN / DASHBOARD */
+        #main { background: var(--bg); }
+        
+        .header { 
+            position: fixed; top: 0; left: 0; right: 0; 
+            padding: 16px 20px; 
+            background: rgba(0,0,0,0.95); backdrop-filter: blur(20px); 
+            z-index: 100; border-bottom: 1px solid var(--border); 
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .header-logo { display: flex; align-items: center; gap: 12px; }
+        .header-logo-icon { 
+            width: 36px; height: 36px; border-radius: 10px; 
+            background: var(--accent); 
+            display: flex; align-items: center; justify-content: center; 
+            font-weight: 900; color: #000; font-size: 14px;
+        }
+        .header-title { font-weight: 700; font-size: 18px; }
+        .header-action { 
+            width: 40px; height: 40px; border-radius: 50%; 
+            background: var(--bg-elevated); border: none;
+            display: flex; align-items: center; justify-content: center; 
+            cursor: pointer; font-size: 18px;
+        }
+        
+        .main-content { flex: 1; padding: 80px 20px 100px; overflow-y: auto; }
+        
+        .welcome-section { margin-bottom: 24px; }
+        .welcome-title { font-size: 26px; font-weight: 800; margin-bottom: 4px; }
+        .welcome-subtitle { color: var(--text-secondary); font-size: 14px; }
+        
+        .stats-row { display: flex; gap: 12px; margin-bottom: 24px; overflow-x: auto; padding-bottom: 8px; }
+        .stat-card { 
+            flex: 1; min-width: 100px;
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: 12px; padding: 16px; text-align: center;
+        }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        
+        .quick-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
+        .action-card { 
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: 16px; padding: 20px; text-align: center; 
+            cursor: pointer; transition: all 0.3s;
+        }
+        .action-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+        .action-icon { font-size: 32px; margin-bottom: 8px; }
+        .action-title { font-weight: 600; font-size: 13px; color: var(--text-secondary); }
+        
+        .section-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .section-title span { color: var(--accent); }
+        
+        .bottom-nav { 
+            position: fixed; bottom: 0; left: 0; right: 0; 
+            background: rgba(0,0,0,0.95); backdrop-filter: blur(20px); 
+            border-top: 1px solid var(--border); 
+            display: flex; justify-content: space-around; padding: 12px 0;
+        }
+        .nav-item { 
+            display: flex; flex-direction: column; align-items: center; gap: 4px; 
+            color: var(--text-muted); cursor: pointer; 
+            padding: 8px 16px; border-radius: 12px; 
+            transition: all 0.2s; border: none; background: none;
+            font-family: inherit; font-size: inherit;
+        }
+        .nav-item.active { color: var(--accent); }
+        .nav-item:hover { background: var(--bg-elevated); }
+        .nav-icon { font-size: 20px; }
+        .nav-label { font-size: 11px; font-weight: 500; }
+        
+        /* ACTION SCREEN */
+        #action { background: var(--bg); }
+        .back-header { 
+            position: fixed; top: 0; left: 0; right: 0; 
+            padding: 16px 20px; 
+            background: rgba(0,0,0,0.95); backdrop-filter: blur(20px); 
+            z-index: 100; border-bottom: 1px solid var(--border); 
+            display: flex; align-items: center; gap: 16px;
+        }
+        .back-btn { 
+            width: 40px; height: 40px; border-radius: 50%; 
+            background: var(--bg-elevated); border: none; 
+            color: var(--text); cursor: pointer; 
+            display: flex; align-items: center; justify-content: center; font-size: 18px;
+        }
+        .screen-title { font-weight: 700; font-size: 18px; }
+        .action-content { flex: 1; padding: 80px 20px 20px; }
+        .form-group { margin-bottom: 16px; }
+        .form-label { display: block; margin-bottom: 8px; font-weight: 500; font-size: 14px; color: var(--text-secondary); }
+        
+        /* RESULT SCREEN */
+        #result { align-items: center; justify-content: center; text-align: center; padding: 40px; }
+        .result-icon { 
+            width: 100px; height: 100px; border-radius: 50%; 
+            background: var(--success); 
+            display: flex; align-items: center; justify-content: center; 
+            font-size: 48px; margin: 0 auto 32px;
+        }
+        .result-title { font-size: 28px; font-weight: 800; margin-bottom: 12px; }
+        .result-message { color: var(--text-secondary); margin-bottom: 32px; }
+        .result-buttons { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 280px; }
+        
+        /* PROFILE SCREEN */
+        #profile { background: var(--bg); }
+        .profile-header { text-align: center; padding: 80px 20px 24px; border-bottom: 1px solid var(--border); }
+        .profile-avatar { 
+            width: 80px; height: 80px; border-radius: 50%; 
+            background: linear-gradient(135deg, var(--accent), #FDE047); 
+            margin: 0 auto 16px; 
+            display: flex; align-items: center; justify-content: center; font-size: 32px;
+        }
+        .profile-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+        .profile-email { color: var(--text-muted); font-size: 14px; }
+        .settings-list { padding: 20px; }
+        .settings-item { 
+            display: flex; align-items: center; gap: 16px; 
+            padding: 16px; 
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: 12px; margin-bottom: 12px; 
+            cursor: pointer; transition: all 0.2s;
+        }
+        .settings-item:hover { border-color: var(--accent); }
+        .settings-icon { font-size: 24px; }
+        .settings-text { flex: 1; font-weight: 500; }
+        .settings-arrow { color: var(--text-muted); }
+        
+        /* TOAST */
+        .toast { 
+            position: fixed; bottom: 100px; left: 20px; right: 20px; 
+            background: var(--bg-elevated); border: 1px solid var(--success);
+            border-radius: 12px; padding: 16px; 
+            display: flex; align-items: center; gap: 12px; 
+            transform: translateY(200%); transition: transform 0.3s; z-index: 200;
+        }
+        .toast.show { transform: translateY(0); }
+        .toast-icon { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: var(--success); 
+            display: flex; align-items: center; justify-content: center;
+        }
+        .toast-text { flex: 1; }
+        .toast-title { font-weight: 600; font-size: 14px; }
+        .toast-message { font-size: 12px; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+    <div class="scanline"></div>
+    
+    <!-- SPLASH SCREEN -->
+    <div id="splash" class="screen active grid-bg">
+        <div class="fade-in">
+            <div class="logo-large animate-float">${productName.substring(0, 2).toUpperCase()}</div>
+            <h1 class="splash-title">${productName}</h1>
+            <p class="splash-desc">${valueProp}</p>
+            <button class="btn-primary animate-glow" onclick="showScreen('onboarding')">Начать</button>
+        </div>
+    </div>
+
+    <!-- ONBOARDING -->
+    <div id="onboarding" class="screen grid-bg">
+        <div class="progress-bar"><div class="progress-fill" id="progress" style="width: 33%"></div></div>
+        
+        <div id="step1" class="step fade-in">
+            <div class="step-icon">✨</div>
+            <h2 class="step-title">${func1.substring(0, 40)}</h2>
+            <p class="step-desc">Ключевая возможность продукта</p>
+        </div>
+        
+        <div id="step2" class="step" style="display: none;">
+            <div class="step-icon">🎯</div>
+            <h2 class="step-title">${func2.substring(0, 40)}</h2>
+            <p class="step-desc">Дополнительные функции</p>
+        </div>
+        
+        <div id="step3" class="step" style="display: none;">
+            <div class="step-icon">🚀</div>
+            <h2 class="step-title">Готовы начать?</h2>
+            <p class="step-desc">${func3.substring(0, 40)}</p>
+        </div>
+        
+        <div class="onboarding-buttons">
+            <button class="btn-secondary" id="skipBtn" onclick="showScreen('main')">Пропустить</button>
+            <button class="btn-primary animate-glow" id="nextBtn" onclick="nextStep()">Далее</button>
+        </div>
+    </div>
+
+    <!-- MAIN / DASHBOARD -->
+    <div id="main" class="screen">
+        <header class="header">
+            <div class="header-logo">
+                <div class="header-logo-icon">${productName.substring(0, 2).toUpperCase()}</div>
+                <span class="header-title">${productName.split(' ')[0]}</span>
+            </div>
+            <button class="header-action" onclick="showScreen('profile')">👤</button>
+        </header>
+        
+        <main class="main-content">
+            <section class="welcome-section fade-in">
+                <h2 class="welcome-title">Добро пожаловать!</h2>
+                <p class="welcome-subtitle">${valueProp.substring(0, 60)}</p>
+            </section>
+            
+            <div class="stats-row">
+                <div class="stat-card animate-float" style="animation-delay: 0s;">
+                    <div class="stat-value mono">24</div>
+                    <div class="stat-label">Сегодня</div>
+                </div>
+                <div class="stat-card animate-float" style="animation-delay: 0.1s;">
+                    <div class="stat-value mono">+12%</div>
+                    <div class="stat-label">Рост</div>
+                </div>
+                <div class="stat-card animate-float" style="animation-delay: 0.2s;">
+                    <div class="stat-value mono">5</div>
+                    <div class="stat-label">В процессе</div>
+                </div>
+            </div>
+            
+            <section class="quick-actions">
+                <div class="action-card" onclick="showScreen('action')">
+                    <div class="action-icon">⚡</div>
+                    <div class="action-title">${func1.substring(0, 20)}</div>
+                </div>
+                <div class="action-card">
+                    <div class="action-icon">📊</div>
+                    <div class="action-title">Статистика</div>
+                </div>
+                <div class="action-card">
+                    <div class="action-icon">📅</div>
+                    <div class="action-title">История</div>
+                </div>
+                <div class="action-card" onclick="showScreen('profile')">
+                    <div class="action-icon">⚙️</div>
+                    <div class="action-title">Настройки</div>
+                </div>
+            </section>
+            
+            <section>
+                <h3 class="section-title">Возможности <span>→</span></h3>
+                <div class="card" style="margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <div style="font-size: 28px;">🎯</div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600;">${func1.substring(0, 30)}</div>
+                            <div style="font-size: 13px; color: var(--text-muted);">Основная функция</div>
+                        </div>
+                        <span style="color: var(--text-muted);">→</span>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <div style="font-size: 28px;">🔒</div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600;">${func2.substring(0, 30)}</div>
+                            <div style="font-size: 13px; color: var(--text-muted);">Безопасность</div>
+                        </div>
+                        <span style="color: var(--text-muted);">→</span>
+                    </div>
+                </div>
+                <div class="card">
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <div style="font-size: 28px;">📈</div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600;">${func3.substring(0, 30)}</div>
+                            <div style="font-size: 13px; color: var(--text-muted);">Аналитика</div>
+                        </div>
+                        <span style="color: var(--text-muted);">→</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+        
+        <nav class="bottom-nav">
+            <button class="nav-item active" onclick="showScreen('main')">
+                <span class="nav-icon">🏠</span>
+                <span class="nav-label">Главная</span>
+            </button>
+            <button class="nav-item" onclick="showScreen('action')">
+                <span class="nav-icon">➕</span>
+                <span class="nav-label">Действие</span>
+            </button>
+            <button class="nav-item" onclick="showScreen('profile')">
+                <span class="nav-icon">👤</span>
+                <span class="nav-label">Профиль</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- ACTION SCREEN -->
+    <div id="action" class="screen">
+        <header class="back-header">
+            <button class="back-btn" onclick="showScreen('main')">←</button>
+            <span class="screen-title">${func1.substring(0, 30)}</span>
+        </header>
+        
+        <main class="action-content">
+            <div class="card fade-in">
+                <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 24px;">Выполнить действие</h3>
+                
+                <div class="form-group">
+                    <label class="form-label">Название</label>
+                    <input type="text" class="input" placeholder="Введите данные">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Категория</label>
+                    <select class="input">
+                        <option>Категория 1</option>
+                        <option>Категория 2</option>
+                        <option>Категория 3</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Описание</label>
+                    <textarea class="input" rows="3" placeholder="Дополнительная информация"></textarea>
+                </div>
+                
+                <button class="btn-primary animate-glow" style="width: 100%; margin-top: 16px;" onclick="showScreen('result')">Выполнить</button>
+            </div>
+        </main>
+    </div>
+
+    <!-- RESULT SCREEN -->
+    <div id="result" class="screen grid-bg">
+        <div class="fade-in">
+            <div class="result-icon animate-pulse">✓</div>
+            <h2 class="result-title">Успешно выполнено!</h2>
+            <p class="result-message">Действие "${func1.substring(0, 20)}" успешно завершено.</p>
+            <div class="result-buttons">
+                <button class="btn-primary animate-glow" onclick="showScreen('main')">На главную</button>
+                <button class="btn-secondary" onclick="showScreen('action')">Новое действие</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PROFILE SCREEN -->
+    <div id="profile" class="screen">
+        <header class="back-header">
+            <button class="back-btn" onclick="showScreen('main')">←</button>
+            <span class="screen-title">Профиль</span>
+        </header>
+        
+        <div class="profile-header">
+            <div class="profile-avatar">👤</div>
+            <div class="profile-name">Пользователь</div>
+            <div class="profile-email">user@example.com</div>
+        </div>
+        
+        <div class="settings-list">
+            <div class="settings-item" onclick="showToast('Настройки сохранены')">
+                <span class="settings-icon">⚙️</span>
+                <span class="settings-text">Настройки аккаунта</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item" onclick="showToast('Уведомления обновлены')">
+                <span class="settings-icon">🔔</span>
+                <span class="settings-text">Уведомления</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item">
+                <span class="settings-icon">🔒</span>
+                <span class="settings-text">Безопасность</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item">
+                <span class="settings-icon">❓</span>
+                <span class="settings-text">Помощь</span>
+                <span class="settings-arrow">→</span>
+            </div>
+            <div class="settings-item" onclick="showScreen('splash')" style="border-color: var(--error);">
+                <span class="settings-icon">🚪</span>
+                <span class="settings-text" style="color: var(--error);">Выйти</span>
+                <span class="settings-arrow">→</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST -->
+    <div id="toast" class="toast">
+        <div class="toast-icon">✓</div>
+        <div class="toast-text">
+            <div class="toast-title">Успешно!</div>
+            <div class="toast-message" id="toastMessage">Действие выполнено</div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 1;
+        const totalSteps = 3;
+        
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            const screen = document.getElementById(id);
+            if (screen) {
+                screen.classList.add('active');
+                window.scrollTo(0, 0);
+            }
+        }
+        
+        function nextStep() {
+            if (currentStep < totalSteps) {
+                document.getElementById('step' + currentStep).style.display = 'none';
+                currentStep++;
+                const nextStepEl = document.getElementById('step' + currentStep);
+                nextStepEl.style.display = 'block';
+                nextStepEl.classList.add('fade-in');
+                document.getElementById('progress').style.width = (currentStep / totalSteps * 100) + '%';
+                
+                if (currentStep === totalSteps) {
+                    document.getElementById('nextBtn').textContent = 'Начать работу';
+                    document.getElementById('nextBtn').onclick = () => showScreen('main');
+                    document.getElementById('skipBtn').style.display = 'none';
+                }
+            }
+        }
+        
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastMessage').textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+    </script>
+</body>
+</html>
+\`\`\``;
+  }
+  // === ТЕСТИРОВАНИЕ ===
+  if (agentType === 'task_architect') {
+    if (lowerMessage.includes('приглаш') || lowerMessage.includes('скрипт')) {
+      return `## 📧 Скрипт приглашения для "${idea.name}"
+
+### Email-приглашение
+
+**Тема:** Приглашение на тестирование ${idea.name}
+
+Здравствуйте!
+
+Приглашаем вас принять участие в тестировании ${idea.name} — ${idea.description.substring(0, 100)}.
+
+**Что тестируем:** ${idea.name}
+**Формат:** Онлайн (Zoom)
+**Длительность:** 30-45 минут
+**Вознаграждение:** [указать]
+
+**Профиль участника:**
+- Интерес к теме: ${idea.description.substring(0, 50)}
+- Опыт использования похожих продуктов
+
+Записаться: [ссылка]
+
+---
+
+### Telegram/WhatsApp
+
+🧪 Приглашение на тестирование!
+
+Продукт: ${idea.name}
+📝 ${idea.description.substring(0, 80)}
+⏱️ Время: 30-45 мин
+🎁 Благодарность: [указать]
+
+Записаться: [ссылка]`;
+    }
+    
+    if (lowerMessage.includes('гайдлайн') || lowerMessage.includes('руководство')) {
+      return `## 📖 Гайдлайн юзабилити-тестирования для "${idea.name}"
+
+### Структура сессии (45 минут)
+
+| Этап | Время | Действие |
+|------|-------|----------|
+| Приветствие | 3 мин | Знакомство |
+| Введение | 5 мин | Объяснение формата |
+| Задачи | 25 мин | Тестирование |
+| Интервью | 10 мин | Вопросы |
+| Завершение | 2 мин | Благодарность |
+
+### Задачи для тестирования
+
+1. **Ознакомление:** Посмотрите главную страницу, что это за продукт?
+2. **Основная задача:** ${idea.functions[0] || 'Используйте основную функцию'}
+3. **Поиск функции:** Найдите ${idea.functions[1] || 'дополнительную функцию'}
+4. **Завершение:** Выполните целевое действие
+5. **Обратная связь:** Оцените удобство
+
+### Вопросы пост-тест
+
+1. Первое впечатление?
+2. Что было сложно?
+3. Что понравилось?
+4. Что изменить?
+5. Оценка 1-10`;
+    }
+    
+    return `## 📊 Продуктовые метрики для "${idea.name}"
+
+### 1. Северная метрика
+Количество успешных ${idea.functions[0]?.toLowerCase() || 'целевых действий'}
+
+### 2. Acquisition
+- Визиты на сайт
+- Регистрации
+- Конверсия в регистрацию
+
+### 3. Activation
+- Time to first value
+- Первое успешное действие
+- Feature adoption
+
+### 4. Retention
+- Day 1/7/30 retention
+- DAU/MAU
+- Возвращаемость
+
+### 5. Revenue (если применимо)
+- ARPU
+- LTV
+- Conversion to paid
+
+### Рекомендации по отслеживанию
+- Настроить цели в Яндекс.Метрике
+- Логировать: ${idea.functions.slice(0, 3).join(', ') || 'ключевые действия'}
+- Создать дашборд мониторинга`;
+  }
+
+  return `Обработка запроса. Попробуйте ещё раз.`;
+}
