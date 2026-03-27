@@ -4,7 +4,7 @@
 
 import * as fs from 'fs';
 
-const GITHUB_TOKEN = 'REDACTED';
+const GITHUB_TOKEN = 'process.env.GITHUB_TOKEN';
 const GITHUB_REPO = 'Zuhlon/intuiux-agent';
 const GITHUB_API = 'https://api.github.com';
 const BRANCH = 'master';

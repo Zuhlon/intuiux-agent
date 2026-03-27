@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // GitHub API configuration
-const GITHUB_TOKEN = 'REDACTED';
+const GITHUB_TOKEN = 'process.env.GITHUB_TOKEN';
 const GITHUB_REPO = 'Zuhlon/intuiux-agent';
 const GITHUB_API = 'https://api.github.com';
 
