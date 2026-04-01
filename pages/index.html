@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IntuiUX Prototypes</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 100%);
+      color: #fff; 
+      min-height: 100vh; 
+      padding: 40px 20px;
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { 
+      color: #FACC15; 
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .subtitle { color: #888; margin-bottom: 30px; }
+    .prototype-list { list-style: none; }
+    .prototype-item {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 15px;
+      transition: all 0.3s ease;
+    }
+    .prototype-item:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: #FACC15;
+    }
+    .prototype-item a {
+      color: #60a5fa;
+      text-decoration: none;
+      font-size: 18px;
+      font-weight: 500;
+    }
+    .prototype-item a:hover { text-decoration: underline; }
+    .prototype-meta {
+      color: #666;
+      font-size: 14px;
+      margin-top: 8px;
+    }
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      color: #666;
+      font-size: 14px;
+    }
+    .footer a { color: #FACC15; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎨 IntuiUX Prototypes</h1>
+    <p class="subtitle">Прототипы, созданные с помощью IntuiUX Agent</p>
+    
+    <ul class="prototype-list">
+      <li class="prototype-item">
+        <a href="pages/fr-1-uslovno-telefoniya-ats-i-sierem-iun3ps/">FR-1: Условно телефония атс и Сиэрэм</a>
+        <div class="prototype-meta">Создано: 01.04.2026</div>
+      </li>
+    </ul>
+    
+    <div class="footer">
+      Создано с помощью <a href="https://github.com/Zuhlon/intuiux-agent" target="_blank">IntuiUX Agent</a>
+    </div>
+  </div>
+</body>
+</html>
